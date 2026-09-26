@@ -318,8 +318,8 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		"user": user,
 		"org":  org,
 		"usage": map[string]any{
-			"endpoints":       used,
-			"max_endpoints":   plan.MaxEndpoints,
+			"endpoints":            used,
+			"max_endpoints":        plan.MaxEndpoints,
 			"min_interval_seconds": plan.MinIntervalSeconds,
 		},
 	})

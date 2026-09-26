@@ -21,21 +21,21 @@ const (
 
 // Endpoint is a monitored target registered through the API.
 type Endpoint struct {
-	ID                int64     `json:"id"`
-	Name              string    `json:"name"`
-	URL               string    `json:"url"`
-	Method            string    `json:"method"`
-	IntervalSeconds   int       `json:"interval_seconds"`
-	TimeoutMs         int       `json:"timeout_ms"`
-	FailureThreshold  int       `json:"failure_threshold"`
-	ExpectedStatusMin int       `json:"expected_status_min"`
-	ExpectedStatusMax int       `json:"expected_status_max"`
-	Enabled           bool      `json:"enabled"`
+	ID                int64  `json:"id"`
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	Method            string `json:"method"`
+	IntervalSeconds   int    `json:"interval_seconds"`
+	TimeoutMs         int    `json:"timeout_ms"`
+	FailureThreshold  int    `json:"failure_threshold"`
+	ExpectedStatusMin int    `json:"expected_status_min"`
+	ExpectedStatusMax int    `json:"expected_status_max"`
+	Enabled           bool   `json:"enabled"`
 	// OrgID owns the endpoint in SaaS mode; nil marks pre-SaaS global
 	// endpoints owned by the operator (legacy API-key scope).
-	OrgID      *int64    `json:"org_id,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	OrgID     *int64    `json:"org_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // EndpointStatus is the persisted, current state of an endpoint maintained by

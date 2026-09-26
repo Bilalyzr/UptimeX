@@ -60,9 +60,9 @@ func (h *OrgHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"org":    org,
-		"usage":  map[string]any{"endpoints": used},
-		"plans":  plans.All(),
+		"org":     org,
+		"usage":   map[string]any{"endpoints": used},
+		"plans":   plans.All(),
 		"billing": map[string]any{"mode": "demo", "provider": "stripe-ready"},
 	})
 }

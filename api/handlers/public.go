@@ -15,8 +15,8 @@ import (
 
 // PublicHandler serves /api/v1/public/*.
 type PublicHandler struct {
-	Repo    storage.Repository
-	Logger  *slog.Logger
+	Repo   storage.Repository
+	Logger *slog.Logger
 }
 
 // statusWindow is the analytics window behind the public uptime numbers.

@@ -103,8 +103,8 @@ const userCols = `id, org_id, email, password_hash, name, role, created_at`
 
 func scanUser(row interface{ Scan(...any) error }) (*models.User, error) {
 	var (
-		u        models.User
-		created  nullTime
+		u       models.User
+		created nullTime
 	)
 	err := row.Scan(&u.ID, &u.OrgID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &created)
 	if err != nil {
@@ -166,9 +166,9 @@ func (s *SQLStore) GetSessionByTokenHash(ctx context.Context, tokenHash string) 
 		SELECT token_hash, user_id, org_id, created_at, expires_at
 		FROM sessions WHERE token_hash = ? AND expires_at > ?`), tokenHash, time.Now().UTC())
 	var (
-		sess      models.Session
-		created   nullTime
-		expires   nullTime
+		sess    models.Session
+		created nullTime
+		expires nullTime
 	)
 	err := row.Scan(&sess.TokenHash, &sess.UserID, &sess.OrgID, &created, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
