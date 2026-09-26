@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"uptimex/api/middleware"
 	"uptimex/internal/checker"
 	"uptimex/internal/metrics"
 	"uptimex/internal/models"
 	"uptimex/internal/monitor"
+	"uptimex/internal/plans"
 	"uptimex/internal/storage"
 )
 
@@ -80,13 +82,66 @@ func validateEndpoint(e *models.Endpoint, guard *checker.Guard) error {
 	return nil
 }
 
+// --- tenancy helpers --------------------------------------------------------
+
+// canAccessEndpoint reports whether the identity may see/modify the endpoint.
+// The legacy operator scope sees everything; tenant users only their org's.
+func canAccessEndpoint(id *middleware.Identity, e *models.Endpoint) bool {
+	if id == nil || id.Legacy {
+		return true
+	}
+	return e.OrgID != nil && *e.OrgID == id.OrgID
+}
+
+// enforcePlanQuota rejects creates that would exceed the org's endpoint
+// quota. Legacy scope is unlimited.
+func (h *EndpointHandler) enforcePlanQuota(w http.ResponseWriter, r *http.Request, id *middleware.Identity) bool {
+	if id == nil || id.Legacy {
+		return true
+	}
+	plan, _ := plans.ByID(id.Plan)
+	used, err := h.Repo.CountEndpointsInOrg(r.Context(), id.OrgID)
+	if err != nil {
+		h.internalError(w, "quota count", err)
+		return false
+	}
+	if used >= int64(plan.MaxEndpoints) {
+		writeError(w, http.StatusForbidden, "endpoint limit reached for the "+plan.Name+
+			" plan (max "+strconv.Itoa(plan.MaxEndpoints)+"). Upgrade your plan to add more monitors.")
+		return false
+	}
+	return true
+}
+
+// enforcePlanInterval rejects intervals faster than the plan allows.
+func enforcePlanInterval(w http.ResponseWriter, id *middleware.Identity, intervalSeconds int) bool {
+	if id == nil || id.Legacy {
+		return true
+	}
+	plan, _ := plans.ByID(id.Plan)
+	if intervalSeconds < plan.MinIntervalSeconds {
+		writeError(w, http.StatusForbidden, "check interval "+strconv.Itoa(intervalSeconds)+
+			"s is below the "+plan.Name+" plan minimum of "+strconv.Itoa(plan.MinIntervalSeconds)+
+			"s. Upgrade for faster checks.")
+		return false
+	}
+	return true
+}
+
 // List returns endpoint configuration + live state + windowed metrics.
 func (h *EndpointHandler) List(w http.ResponseWriter, r *http.Request) {
 	window, ok := h.windowParam(w, r)
 	if !ok {
 		return
 	}
-	rows, err := h.Metrics.EndpointSummaries(r.Context(), window)
+	id := middleware.IdentityFromContext(r.Context())
+	var rows []metrics.EndpointSummary
+	var err error
+	if id != nil && id.Session {
+		rows, err = h.Metrics.EndpointSummariesInOrg(r.Context(), id.OrgID, window)
+	} else {
+		rows, err = h.Metrics.EndpointSummaries(r.Context(), window)
+	}
 	if err != nil {
 		h.internalError(w, "list endpoints", err)
 		return
@@ -145,6 +200,17 @@ func (h *EndpointHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	id := middleware.IdentityFromContext(r.Context())
+	if !h.enforcePlanQuota(w, r, id) {
+		return
+	}
+	if !enforcePlanInterval(w, id, e.IntervalSeconds) {
+		return
+	}
+	if id != nil && id.Session {
+		orgID := id.OrgID
+		e.OrgID = &orgID
+	}
 	if err := h.Repo.CreateEndpoint(r.Context(), &e); err != nil {
 		h.internalError(w, "create endpoint", err)
 		return
@@ -156,26 +222,39 @@ func (h *EndpointHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, e)
 }
 
-// Get returns one endpoint with its live status and open incident.
-func (h *EndpointHandler) Get(w http.ResponseWriter, r *http.Request) {
+// getOwnedEndpoint loads an endpoint and enforces tenant ownership.
+func (h *EndpointHandler) getOwnedEndpoint(w http.ResponseWriter, r *http.Request) (*models.Endpoint, bool) {
 	id, ok := h.idParam(w, r)
 	if !ok {
-		return
+		return nil, false
 	}
 	e, err := h.Repo.GetEndpoint(r.Context(), id)
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "endpoint not found")
-		return
+		return nil, false
 	}
 	if err != nil {
 		h.internalError(w, "get endpoint", err)
+		return nil, false
+	}
+	if !canAccessEndpoint(middleware.IdentityFromContext(r.Context()), e) {
+		writeError(w, http.StatusNotFound, "endpoint not found")
+		return nil, false
+	}
+	return e, true
+}
+
+// Get returns one endpoint with its live status and open incident.
+func (h *EndpointHandler) Get(w http.ResponseWriter, r *http.Request) {
+	e, ok := h.getOwnedEndpoint(w, r)
+	if !ok {
 		return
 	}
 	resp := map[string]any{"endpoint": e}
-	if st, err := h.Repo.GetStatus(r.Context(), id); err == nil {
+	if st, err := h.Repo.GetStatus(r.Context(), e.ID); err == nil {
 		resp["status"] = st
 	}
-	if inc, err := h.Repo.GetOpenIncident(r.Context(), id); err == nil {
+	if inc, err := h.Repo.GetOpenIncident(r.Context(), e.ID); err == nil {
 		resp["open_incident"] = inc
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -183,19 +262,11 @@ func (h *EndpointHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update partially updates an endpoint (PATCH semantics).
 func (h *EndpointHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.idParam(w, r)
+	existing, ok := h.getOwnedEndpoint(w, r)
 	if !ok {
 		return
 	}
-	existing, err := h.Repo.GetEndpoint(r.Context(), id)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "endpoint not found")
-		return
-	}
-	if err != nil {
-		h.internalError(w, "get endpoint", err)
-		return
-	}
+	id := existing.ID
 
 	var p endpointPayload
 	if !h.decode(w, r, &p) {
@@ -233,6 +304,9 @@ func (h *EndpointHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !enforcePlanInterval(w, middleware.IdentityFromContext(r.Context()), existing.IntervalSeconds) {
+		return
+	}
 	if err := h.Repo.UpdateEndpoint(r.Context(), existing); err != nil {
 		h.internalError(w, "update endpoint", err)
 		return
@@ -246,10 +320,11 @@ func (h *EndpointHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // Delete removes an endpoint and all dependent rows (cascade).
 func (h *EndpointHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.idParam(w, r)
+	e, ok := h.getOwnedEndpoint(w, r)
 	if !ok {
 		return
 	}
+	id := e.ID
 	if err := h.Repo.DeleteEndpoint(r.Context(), id); errors.Is(err, storage.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "endpoint not found")
 		return
@@ -266,17 +341,11 @@ func (h *EndpointHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // Checks returns historical raw checks (?since=<rfc3339|duration>&limit=).
 func (h *EndpointHandler) Checks(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.idParam(w, r)
+	e, ok := h.getOwnedEndpoint(w, r)
 	if !ok {
 		return
 	}
-	if _, err := h.Repo.GetEndpoint(r.Context(), id); errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "endpoint not found")
-		return
-	} else if err != nil {
-		h.internalError(w, "get endpoint", err)
-		return
-	}
+	id := e.ID
 
 	limit := intParam(r, "limit", 200)
 	if limit < 1 || limit > 1000 {
@@ -304,19 +373,13 @@ func (h *EndpointHandler) Checks(w http.ResponseWriter, r *http.Request) {
 
 // EndpointMetrics returns per-endpoint analytics (?window=1h|24h|7d).
 func (h *EndpointHandler) EndpointMetrics(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.idParam(w, r)
+	e, ok := h.getOwnedEndpoint(w, r)
 	if !ok {
 		return
 	}
+	id := e.ID
 	window, ok := h.windowParam(w, r)
 	if !ok {
-		return
-	}
-	if _, err := h.Repo.GetEndpoint(r.Context(), id); errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "endpoint not found")
-		return
-	} else if err != nil {
-		h.internalError(w, "get endpoint", err)
 		return
 	}
 	m, err := h.Metrics.EndpointMetricsFor(r.Context(), id, window)
@@ -331,19 +394,11 @@ func (h *EndpointHandler) EndpointMetrics(w http.ResponseWriter, r *http.Request
 // feeding the failure state machine (manual diagnostics must not distort
 // the incident record).
 func (h *EndpointHandler) Test(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.idParam(w, r)
+	e, ok := h.getOwnedEndpoint(w, r)
 	if !ok {
 		return
 	}
-	e, err := h.Repo.GetEndpoint(r.Context(), id)
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "endpoint not found")
-		return
-	}
-	if err != nil {
-		h.internalError(w, "get endpoint", err)
-		return
-	}
+	id := e.ID
 	ctx, cancel := contextWithTimeout(r.Context(), time.Duration(e.TimeoutMs+2000)*time.Millisecond)
 	defer cancel()
 	res := h.Engine.RunCheckNow(ctx, *e)
@@ -382,7 +437,12 @@ func (h *EndpointHandler) decode(w http.ResponseWriter, r *http.Request, v any) 
 }
 
 func (h *EndpointHandler) internalError(w http.ResponseWriter, op string, err error) {
-	h.Logger.Error("handler_error", "op", op, "error", err)
+	logInternalError(w, h.Logger, op, err)
+}
+
+// logInternalError is the shared 500 path for all handlers.
+func logInternalError(w http.ResponseWriter, logger *slog.Logger, op string, err error) {
+	logger.Error("handler_error", "op", op, "error", err)
 	writeError(w, http.StatusInternalServerError, "internal error")
 }
 

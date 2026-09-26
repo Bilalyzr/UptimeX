@@ -1,7 +1,8 @@
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -10,8 +11,18 @@ import {
 import type { Distribution, TrendPoint } from '../types';
 import { DISTRIBUTION_COLORS, DISTRIBUTION_LABELS, DISTRIBUTION_ORDER } from '../format';
 
+// Light-theme chart palette (kept in sync with styles.css tokens).
+const CHART = {
+  avg: '#0e8f74', // teal (mint family)
+  p95: '#fc6756', // coral
+  p99: '#724ce8', // violet
+  grid: '#dcdcd0', // warm hairline
+  axis: '#6e6e68', // warm gray
+};
+
 // LatencyTrend renders avg/p95/p99 over time buckets. Clarity first: thin
-// lines, tabular axes, tooltips with exact values (PRD §24).
+// lines, tabular axes, tooltips with exact values (PRD §24). The avg series
+// carries a soft gradient fill to anchor the trend at a glance.
 export function LatencyTrend({ trend }: { trend: TrendPoint[] }) {
   const data = trend.map((p) => ({
     ...p,
@@ -21,43 +32,62 @@ export function LatencyTrend({ trend }: { trend: TrendPoint[] }) {
     <div data-testid="latency-trend">
       <div className="latency-legend" style={{ marginBottom: 8 }}>
         <span>
-          <span className="dot" style={{ background: '#38bdf8' }} />
+          <span className="dot" style={{ background: CHART.avg }} />
           avg
         </span>
         <span>
-          <span className="dot" style={{ background: '#f59e0b' }} />
+          <span className="dot" style={{ background: CHART.p95 }} />
           p95
         </span>
         <span>
-          <span className="dot" style={{ background: '#ef4444' }} />
+          <span className="dot" style={{ background: CHART.p99 }} />
           p99
         </span>
       </div>
       <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid stroke="#22304f" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="timeLabel" stroke="#8ea0bd" fontSize={11} tickLine={false} />
+        <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id="avgFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={CHART.avg} stopOpacity={0.22} />
+              <stop offset="100%" stopColor={CHART.avg} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke={CHART.grid} strokeDasharray="4 4" vertical={false} />
+          <XAxis dataKey="timeLabel" stroke={CHART.axis} fontSize={11} tickLine={false} axisLine={false} dy={6} />
           <YAxis
-            stroke="#8ea0bd"
+            stroke={CHART.axis}
             fontSize={11}
             tickLine={false}
+            axisLine={false}
             width={54}
             tickFormatter={(v: number) => `${v}ms`}
           />
           <Tooltip
             contentStyle={{
-              background: '#111a2e',
-              border: '1px solid #22304f',
-              borderRadius: 8,
+              background: '#fafaf6',
+              border: '1px solid #353539',
+              borderRadius: 12,
               fontSize: 12,
+              boxShadow: '0 8px 24px rgba(10, 9, 15, 0.12)',
+              padding: '8px 12px',
             }}
-            labelStyle={{ color: '#e2e8f0' }}
+            labelStyle={{ color: '#0a090f', fontWeight: 600, marginBottom: 4 }}
+            itemStyle={{ color: '#6e6e68' }}
+            cursor={{ stroke: '#858580', strokeDasharray: '4 4' }}
             formatter={(value: number | string, name) => [`${Number(value).toFixed(1)}ms`, name]}
           />
-          <Line type="monotone" dataKey="avg_ms" name="avg" stroke="#38bdf8" strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="p95_ms" name="p95" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="p99_ms" name="p99" stroke="#ef4444" strokeWidth={1.5} dot={false} />
-        </LineChart>
+          <Area
+            type="monotone"
+            dataKey="avg_ms"
+            name="avg"
+            stroke="none"
+            fill="url(#avgFill)"
+            isAnimationActive={false}
+          />
+          <Line type="monotone" dataKey="avg_ms" name="avg" stroke={CHART.avg} strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+          <Line type="monotone" dataKey="p95_ms" name="p95" stroke={CHART.p95} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+          <Line type="monotone" dataKey="p99_ms" name="p99" stroke={CHART.p99} strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={{ r: 4 }} />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );

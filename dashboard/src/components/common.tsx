@@ -16,7 +16,10 @@ export function Badge({ state }: { state: string }) {
   return <span className={`badge badge-${state}`}>{state}</span>;
 }
 
-export function Loading({ label = 'Loading…' }: { label?: string }) {
+export function Loading({ label = 'Loading…', skeleton = true }: { label?: string; skeleton?: boolean }) {
+  if (skeleton) {
+    return <div className="loading skeleton" aria-label={label} role="status" />;
+  }
   return <div className="loading muted">{label}</div>;
 }
 

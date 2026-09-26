@@ -54,6 +54,12 @@ type APIConfig struct {
 	RateLimitBurst    int           // token bucket capacity
 	CORSAllowedOrigin string        // dashboard origin permitted to call the API
 	ShutdownTimeout   time.Duration // graceful HTTP shutdown budget
+	// SAASMode enables the multi-tenant surface: signup/login sessions,
+	// per-org data scoping, plan quotas and public status pages. Anonymous
+	// requests are rejected except on auth/public endpoints.
+	SAASMode      bool
+	SessionTTL    time.Duration // login session lifetime
+	SecureCookies bool          // set the Secure flag on session cookies (HTTPS)
 }
 
 // SecurityConfig controls outbound probing safeguards (SSRF mitigation).
@@ -116,6 +122,9 @@ func Load() (*Config, error) {
 			RateLimitBurst:    envInt("RATE_LIMIT_BURST", 40),
 			CORSAllowedOrigin: envStr("CORS_ALLOWED_ORIGIN", ""),
 			ShutdownTimeout:   envDur("API_SHUTDOWN_TIMEOUT", 15*time.Second),
+			SAASMode:          envBool("SAAS_MODE", false),
+			SessionTTL:        envDur("SESSION_TTL", 7*24*time.Hour),
+			SecureCookies:     envBool("SESSION_COOKIE_SECURE", false),
 		},
 		Security: SecurityConfig{
 			AllowPrivateTargets: envBool("ALLOW_PRIVATE_TARGETS", false),

@@ -10,20 +10,25 @@ import (
 )
 
 const endpointCols = `id, name, url, method, interval_seconds, timeout_ms, failure_threshold,
-	expected_status_min, expected_status_max, enabled, created_at, updated_at`
+	expected_status_min, expected_status_max, enabled, org_id, created_at, updated_at`
 
 func scanEndpoint(row interface{ Scan(...any) error }) (*models.Endpoint, error) {
 	var (
 		e                models.Endpoint
 		created, updated nullTime
 		enabled          nullBool
+		orgID            sql.NullInt64
 	)
 	err := row.Scan(&e.ID, &e.Name, &e.URL, &e.Method, &e.IntervalSeconds, &e.TimeoutMs,
-		&e.FailureThreshold, &e.ExpectedStatusMin, &e.ExpectedStatusMax, &enabled, &created, &updated)
+		&e.FailureThreshold, &e.ExpectedStatusMin, &e.ExpectedStatusMax, &enabled, &orgID, &created, &updated)
 	if err != nil {
 		return nil, err
 	}
 	e.Enabled = enabled.Bool
+	if orgID.Valid {
+		v := orgID.Int64
+		e.OrgID = &v
+	}
 	e.CreatedAt = created.Time.UTC()
 	e.UpdatedAt = updated.Time.UTC()
 	return &e, nil
@@ -41,10 +46,10 @@ func (s *SQLStore) CreateEndpoint(ctx context.Context, e *models.Endpoint) error
 
 	err = tx.QueryRowContext(ctx, s.q(`
 		INSERT INTO endpoints (name, url, method, interval_seconds, timeout_ms, failure_threshold,
-			expected_status_min, expected_status_max, enabled, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id`),
+			expected_status_min, expected_status_max, enabled, org_id, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`),
 		e.Name, e.URL, e.Method, e.IntervalSeconds, e.TimeoutMs, e.FailureThreshold,
-		e.ExpectedStatusMin, e.ExpectedStatusMax, e.Enabled, now, now).Scan(&e.ID)
+		e.ExpectedStatusMin, e.ExpectedStatusMax, e.Enabled, int64PtrArg(e.OrgID), now, now).Scan(&e.ID)
 	if err != nil {
 		return err
 	}

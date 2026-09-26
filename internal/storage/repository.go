@@ -19,6 +19,10 @@ var ErrNotFound = errors.New("record not found")
 // for an endpoint (guarded by a partial unique index at the database level).
 var ErrDuplicateOpenIncident = errors.New("open incident already exists for endpoint")
 
+// ErrDuplicateEmail is returned when signing up with an already-registered
+// email (unique index on users.email).
+var ErrDuplicateEmail = errors.New("email already registered")
+
 // LatencySample is one raw observation used for metrics computation.
 type LatencySample struct {
 	EndpointID     int64
@@ -62,4 +66,25 @@ type Repository interface {
 	UpdateIncident(ctx context.Context, incidentID int64, failureCount int, lastError string) error
 	GetOpenIncident(ctx context.Context, endpointID int64) (*models.Incident, error)
 	ListIncidents(ctx context.Context, status string, limit int) ([]models.IncidentDetail, error)
+
+	// SaaS tenancy: organizations, users, sessions.
+	CreateOrganization(ctx context.Context, o *models.Organization) error
+	GetOrganization(ctx context.Context, id int64) (*models.Organization, error)
+	GetOrganizationBySlug(ctx context.Context, slug string) (*models.Organization, error)
+	UpdateOrganization(ctx context.Context, o *models.Organization) error
+	UpdateOrganizationPlan(ctx context.Context, id int64, plan string) error
+	CreateUser(ctx context.Context, u *models.User) error
+	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
+	GetUserByID(ctx context.Context, id int64) (*models.User, error)
+	CreateSession(ctx context.Context, s *models.Session) error
+	GetSessionByTokenHash(ctx context.Context, tokenHash string) (*models.Session, error)
+	DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error
+	DeleteExpiredSessions(ctx context.Context) error
+
+	// Org-scoped analytics (org_id 0 never matches; legacy rows have NULL).
+	CountEndpointsInOrg(ctx context.Context, orgID int64) (int64, error)
+	ListIncidentsInOrg(ctx context.Context, orgID int64, status string, limit int) ([]models.IncidentDetail, error)
+	CountOutcomesInOrg(ctx context.Context, orgID int64, since time.Time) (int64, int64, error)
+	StatusCountsInOrg(ctx context.Context, orgID int64, since time.Time) ([]StatusCount, error)
+	SelectSamplesInOrg(ctx context.Context, orgID int64, since time.Time, perEndpointLimit int) (map[int64][]LatencySample, error)
 }

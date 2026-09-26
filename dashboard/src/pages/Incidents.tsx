@@ -63,7 +63,7 @@ export function Incidents() {
                   return (
                     <tr key={inc.id}>
                       <td>
-                        <Link to={`/endpoints/${inc.endpoint_id}`} className="endpoint-name">
+                        <Link to={`/app/endpoints/${inc.endpoint_id}`} className="endpoint-name">
                           {inc.endpoint_name}
                         </Link>
                         <span className="endpoint-url">{inc.endpoint_url}</span>

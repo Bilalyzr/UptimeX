@@ -31,8 +31,11 @@ type Endpoint struct {
 	ExpectedStatusMin int       `json:"expected_status_min"`
 	ExpectedStatusMax int       `json:"expected_status_max"`
 	Enabled           bool      `json:"enabled"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	// OrgID owns the endpoint in SaaS mode; nil marks pre-SaaS global
+	// endpoints owned by the operator (legacy API-key scope).
+	OrgID      *int64    `json:"org_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // EndpointStatus is the persisted, current state of an endpoint maintained by

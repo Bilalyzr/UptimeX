@@ -107,6 +107,7 @@ func run() error {
 	root := routes.New(routes.Deps{
 		Logger:    logger,
 		APIConfig: &cfg.API,
+		Repo:      store,
 		Health: handlers.NewHealthHandler(startedAt, cfg.MonitorName, func() error {
 			pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer pingCancel()
@@ -126,6 +127,14 @@ func run() error {
 			Logger:      logger,
 		},
 		Incidents: &handlers.IncidentHandler{Repo: store, Logger: logger},
+		Auth: &handlers.AuthHandler{
+			Repo:          store,
+			Logger:        logger,
+			SessionTTL:    cfg.API.SessionTTL,
+			SecureCookies: cfg.API.SecureCookies,
+		},
+		Org:    &handlers.OrgHandler{Repo: store, Logger: logger},
+		Public: &handlers.PublicHandler{Repo: store, Logger: logger},
 	})
 
 	srv := &http.Server{

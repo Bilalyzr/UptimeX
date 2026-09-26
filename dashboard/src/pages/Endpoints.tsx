@@ -138,7 +138,7 @@ export function Endpoints() {
                 {endpoints.map((ep) => (
                   <tr key={ep.id} style={{ opacity: ep.enabled ? 1 : 0.55 }}>
                     <td>
-                      <Link to={`/endpoints/${ep.id}`} className="endpoint-name">
+                      <Link to={`/app/endpoints/${ep.id}`} className="endpoint-name">
                         {ep.name}
                       </Link>
                       <span className="endpoint-url">{ep.url}</span>

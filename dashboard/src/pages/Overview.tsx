@@ -71,7 +71,7 @@ export function Overview() {
             <div className="row">
               <h3 className="card-title">Open incidents</h3>
               <span className="spacer" />
-              <Link to="/incidents">All incidents →</Link>
+              <Link to="/app/incidents">All incidents →</Link>
             </div>
             {incidents.loading ? (
               <div className="loading">Loading…</div>
@@ -92,7 +92,7 @@ export function Overview() {
                   {incidents.data!.incidents.map((inc) => (
                     <tr key={inc.id}>
                       <td>
-                        <Link to={`/endpoints/${inc.endpoint_id}`} className="endpoint-name">
+                        <Link to={`/app/endpoints/${inc.endpoint_id}`} className="endpoint-name">
                           {inc.endpoint_name}
                         </Link>
                       </td>

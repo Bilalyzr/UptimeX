@@ -41,10 +41,43 @@ External Checker ──heartbeat──► /health  (monitor-level alerting if de
 | Status distribution | 200/201/2xx/3xx/4xx/5xx/timeout/network/blocked buckets |
 | Alerting | Webhook (HMAC-signed) + optional SMTP email; cooldown dedup; HIGH_LATENCY |
 | Self-monitoring | `/health` heartbeat + independent external checker container |
+| SaaS multi-tenancy | Organizations, signup/login (PBKDF2 password hashing, HttpOnly cookie sessions), per-org data isolation, plan quotas, billing, public status pages |
 | Storage | PostgreSQL (production) / SQLite (dev) behind one repository interface |
 | Security | SSRF guard (scheme, credentials, private/link-local/metadata targets, dial-time enforcement), API-key auth, rate limiting |
 | Infrastructure | Multi-stage Dockerfiles, healthchecked docker-compose, GitHub Actions CI |
 | Testing | Unit, concurrency/race, integration (PostgreSQL), API, E2E, failure injection, load benchmarks |
+
+## Running as a SaaS product
+
+The same binary runs either as a single-tenant self-hosted monitor (default)
+or as a multi-tenant SaaS. Set `SAAS_MODE=true` and the full product surface
+turns on:
+
+- **Accounts & tenancy** — `POST /api/v1/auth/signup` creates an organization
+  (tenant) with its owner user; passwords are PBKDF2-HMAC-SHA256 hashed and
+  sessions are random 256-bit tokens in HttpOnly cookies (only SHA-256 hashes
+  are stored). Every endpoint, incident and metric is scoped to the caller's
+  organization; one tenant can never read another's data.
+- **Plans & quotas** — Free ($0: 5 endpoints, 60s interval), Pro ($20/mo: 50,
+  30s) and Business ($99/mo: 250, 10s). Quotas and interval floors are
+  enforced server-side on create/update (`internal/plans`).
+- **Billing** — `GET/POST /api/v1/org*` serves the plan catalog, live usage
+  and plan changes. Plan switching is immediate (demo billing); the handler
+  is the integration point for a Stripe checkout webhook.
+- **Public status pages** — every org gets an anonymous status page at
+  `/status/{org-slug}` (API: `GET /api/v1/public/status/{slug}`) with live
+  service states, 24h uptime, P95 and open incidents; orgs can disable theirs.
+- **Marketing site** — the dashboard SPA serves a landing page with pricing
+  at `/`, auth at `/login` & `/signup`, and the app at `/app/*`.
+
+In SaaS mode anonymous API access is rejected; the operator `API_KEY`
+retains full global access. Legacy (non-SaaS) behavior is byte-for-byte
+unchanged — all pre-SaaS tests pass unmodified.
+
+```bash
+DB_DRIVER=sqlite SQLITE_PATH=./saas.db HTTP_ADDR=:8010 SAAS_MODE=true \
+  go run ./cmd/monitor
+```
 
 ## Quick start (Docker)
 

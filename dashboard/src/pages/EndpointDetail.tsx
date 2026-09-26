@@ -40,7 +40,7 @@ export function EndpointDetail() {
       <div className="page-header">
         <div>
           <div className="subtitle">
-            <Link to="/endpoints">← Endpoints</Link>
+            <Link to="/app/endpoints">← Endpoints</Link>
           </div>
           <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {ep.name} {status ? <Badge state={status.state} /> : null}

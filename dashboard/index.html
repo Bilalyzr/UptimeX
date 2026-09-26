@@ -3,10 +3,49 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>UptimeX Dashboard</title>
+    <meta name="theme-color" content="#e9eee7" />
+    <meta
+      name="description"
+      content="UptimeX — distributed health & uptime monitoring. Know it's down before your users do."
+    />
+    <title>UptimeX — Uptime monitoring that pages you once</title>
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Epilogue:wght@300;400;500;600;700;800&family=Violet+Sans&family=Roboto+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <!-- ChainGPT-style boot loader: dark curtain, frame lines, corner
+         brackets, pulsing center — wiped away once the app mounts. -->
+    <div id="boot-loader" aria-hidden="true">
+      <span class="bl-line bl-line-left"></span>
+      <span class="bl-line bl-line-center"></span>
+      <span class="bl-line bl-line-right"></span>
+      <span class="bl-hline bl-hline-top"></span>
+      <span class="bl-hline bl-hline-bottom"></span>
+      <span class="bl-corner bl-tl"></span>
+      <span class="bl-corner bl-tr"></span>
+      <span class="bl-corner bl-bl"></span>
+      <span class="bl-corner bl-br"></span>
+      <div class="bl-center">
+        <svg class="bl-logo" viewBox="0 0 48 48" aria-hidden="true">
+          <path
+            d="M8 26 H14 L17.5 14 L22 34 L26 22 L29 26 H40"
+            fill="none"
+            stroke="#26f4d0"
+            stroke-width="3.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span class="bl-word">UptimeX</span>
+        <span class="bl-bar"><span></span></span>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

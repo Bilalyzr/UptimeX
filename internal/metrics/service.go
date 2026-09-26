@@ -333,3 +333,166 @@ func sortSamplesAsc(s []storage.LatencySample) {
 		s[i], s[j] = s[j], s[i]
 	}
 }
+
+// OverviewInOrg assembles the tenant-scoped overview (SaaS dashboard).
+func (s *Service) OverviewInOrg(ctx context.Context, orgID int64, window time.Duration) (*OverviewMetrics, error) {
+	to := time.Now().UTC()
+	from := to.Add(-window)
+
+	out := &OverviewMetrics{Window: WindowString(window), From: from, To: to}
+
+	endpoints, err := s.Repo.ListEndpoints(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	orgEndpoints := make([]models.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		if e.OrgID != nil && *e.OrgID == orgID {
+			orgEndpoints = append(orgEndpoints, e)
+		}
+	}
+	statuses, err := s.Repo.ListStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stateByEndpoint := map[int64]models.EndpointStatus{}
+	for _, st := range statuses {
+		stateByEndpoint[st.EndpointID] = st
+	}
+	out.Endpoints.Total = len(orgEndpoints)
+	for _, e := range orgEndpoints {
+		if !e.Enabled {
+			out.Endpoints.Disabled++
+			continue
+		}
+		switch stateByEndpoint[e.ID].State {
+		case models.StateDown:
+			out.Endpoints.Down++
+		case models.StateFailing:
+			out.Endpoints.Failing++
+		default:
+			out.Endpoints.Healthy++
+		}
+	}
+
+	total, success, err := s.Repo.CountOutcomesInOrg(ctx, orgID, from)
+	if err != nil {
+		return nil, err
+	}
+	out.TotalChecks, out.SuccessfulChecks, out.FailedChecks = total, success, total-success
+	out.UptimePct = Pct(success, total)
+	out.FailureRatePct = 100 - out.UptimePct
+	if out.FailureRatePct < 0 {
+		out.FailureRatePct = 0
+	}
+
+	counts, err := s.Repo.StatusCountsInOrg(ctx, orgID, from)
+	if err != nil {
+		return nil, err
+	}
+	out.StatusDistribution = BuildDistribution(counts)
+
+	samplesByEp, err := s.Repo.SelectSamplesInOrg(ctx, orgID, from, MaxSamplesPerEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	var all []storage.LatencySample
+	for _, samps := range samplesByEp {
+		all = append(all, samps...)
+	}
+	values := make([]int64, 0, len(all))
+	for _, smp := range all {
+		values = append(values, smp.ResponseTimeMs)
+	}
+	out.Latency = SummarizeLatency(values)
+	sortSamplesAsc(all)
+	out.Trend = BuildTrend(all, from, to, TrendPoints)
+
+	incidents, err := s.Repo.ListIncidentsInOrg(ctx, orgID, models.IncidentOpen, 1000)
+	if err != nil {
+		return nil, err
+	}
+	out.OpenIncidents = int64(len(incidents))
+	return out, nil
+}
+
+// EndpointSummariesInOrg is EndpointSummaries scoped to one tenant.
+func (s *Service) EndpointSummariesInOrg(ctx context.Context, orgID int64, window time.Duration) ([]EndpointSummary, error) {
+	endpoints, err := s.Repo.ListEndpoints(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	orgEndpoints := make([]models.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		if e.OrgID != nil && *e.OrgID == orgID {
+			orgEndpoints = append(orgEndpoints, e)
+		}
+	}
+	statuses, err := s.Repo.ListStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stateByEndpoint := map[int64]models.EndpointStatus{}
+	for _, st := range statuses {
+		stateByEndpoint[st.EndpointID] = st
+	}
+
+	from := time.Now().UTC().Add(-window)
+	samplesByEp, err := s.Repo.SelectSamplesInOrg(ctx, orgID, from, MaxSamplesPerEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	outcomes := map[int64][2]int64{} // endpoint -> {total, success}
+	for _, samps := range samplesByEp {
+		var ok int64
+		for _, smp := range samps {
+			if smp.Success {
+				ok++
+			}
+		}
+		outcomes[samps[0].EndpointID] = [2]int64{int64(len(samps)), ok}
+	}
+
+	openIncidents, err := s.Repo.ListIncidentsInOrg(ctx, orgID, models.IncidentOpen, 1000)
+	if err != nil {
+		return nil, err
+	}
+	openByEndpoint := map[int64]int64{}
+	for _, inc := range openIncidents {
+		openByEndpoint[inc.EndpointID] = inc.ID
+	}
+
+	winLabel := WindowString(window)
+	out := make([]EndpointSummary, 0, len(orgEndpoints))
+	for _, e := range orgEndpoints {
+		row := EndpointSummary{Endpoint: e}
+		if st, ok := stateByEndpoint[e.ID]; ok {
+			row.State = st.State
+			row.ConsecutiveFailures = st.ConsecutiveFailures
+			row.LastSuccessAt = st.LastSuccessAt
+			row.LastFailureAt = st.LastFailureAt
+			row.LastCheckedAt = st.LastCheckedAt
+		} else {
+			row.State = models.StateHealthy
+		}
+		if id, ok := openByEndpoint[e.ID]; ok {
+			row.OpenIncidentID = &id
+		}
+		if o, ok := outcomes[e.ID]; ok && o[0] > 0 {
+			uptime := Pct(o[1], o[0])
+			var values []int64
+			for _, smp := range samplesByEp[e.ID] {
+				values = append(values, smp.ResponseTimeMs)
+			}
+			lat := SummarizeLatency(values)
+			total := o[0]
+			row.Window = &winLabel
+			row.UptimePct = &uptime
+			row.P99Ms = &lat.P99Ms
+			row.AvgMs = &lat.AvgMs
+			row.TotalChecks = &total
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}

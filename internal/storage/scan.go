@@ -58,3 +58,11 @@ func strPtrArg(s *string) any {
 	}
 	return *s
 }
+
+// int64PtrArg binds *int64 (nil becomes NULL).
+func int64PtrArg(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}

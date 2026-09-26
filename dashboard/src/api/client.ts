@@ -11,11 +11,25 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
+    credentials: 'same-origin', // cookie-based sessions
     headers: { 'Content-Type': 'application/json', ...apiKeyHeader(), ...(init?.headers ?? {}) },
     ...init,
   });
   if (resp.status === 204) {
     return undefined as T;
+  }
+  // Strict sessions: an expired/missing session inside the app means the
+  // user must re-authenticate — bounce to /login instead of painting 401
+  // error banners everywhere. Auth and public endpoints are exempt (they
+  // legitimately run without a session).
+  if (
+    resp.status === 401 &&
+    window.location.pathname.startsWith('/app') &&
+    !path.startsWith('/api/v1/auth/') &&
+    !path.startsWith('/api/v1/public/')
+  ) {
+    window.location.assign('/login');
+    throw new ApiError(401, 'session expired');
   }
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok) {

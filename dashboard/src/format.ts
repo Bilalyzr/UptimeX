@@ -47,17 +47,17 @@ export const DISTRIBUTION_ORDER = [
 ];
 
 export const DISTRIBUTION_COLORS: Record<string, string> = {
-  '200': '#22c55e',
-  '201': '#4ade80',
-  '2xx': '#86efac',
-  '3xx': '#38bdf8',
-  '4xx': '#fbbf24',
-  '5xx': '#f87171',
-  timeout: '#fb923c',
-  network_error: '#a78bfa',
-  blocked: '#f472b6',
-  invalid_url: '#94a3b8',
-  other: '#64748b',
+  '200': '#0e8f74',
+  '201': '#17b58e',
+  '2xx': '#4cc39d',
+  '3xx': '#caa53d',
+  '4xx': '#e0862f',
+  '5xx': '#e04431',
+  timeout: '#b45309',
+  network_error: '#724ce8',
+  blocked: '#c026d3',
+  invalid_url: '#858580',
+  other: '#6e6e68',
 };
 
 export const DISTRIBUTION_LABELS: Record<string, string> = {
