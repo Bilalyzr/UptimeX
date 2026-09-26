@@ -10,9 +10,11 @@
 /dist
 dashboard/dist
 dashboard/node_modules
-monitor
-heartbeatchecker
-loadbench
+# Build artifacts (anchored: compiled binaries at repo root only — never the
+# source packages internal/monitor, internal/heartbeatchecker, cmd/*)
+/monitor
+/heartbeatchecker
+/loadbench
 *.exe
 
 # Coverage / test output
