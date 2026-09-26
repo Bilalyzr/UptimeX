@@ -1,0 +1,11 @@
+.git
+.env
+*.db
+*.db-wal
+*.db-shm
+dashboard/node_modules
+dashboard/dist
+dashboard/coverage
+docs/
+*.md
+tests/

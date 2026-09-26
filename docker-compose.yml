@@ -1,0 +1,97 @@
+# Distributed Health & Uptime Monitoring Platform.
+#
+#   docker compose up --build
+#
+# Services:
+#   postgres           - durable storage (production driver)
+#   monitor            - Go monitoring engine + REST API + heartbeat
+#   dashboard          - React dashboard (nginx), proxied to the monitor
+#   heartbeatchecker   - checker-of-checkers (outside the monitor's failure
+#                        domain by process/container; deploy it on separate
+#                        infrastructure for true independence)
+#
+# NOTE: this compose file intentionally enables ALLOW_PRIVATE_TARGETS so the
+# seeded demo endpoint (the monitor's own /health) works inside the compose
+# network. For internet-facing deployments set ALLOW_PRIVATE_TARGETS=false.
+
+name: uptimex
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-monitor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-monitor}
+      POSTGRES_DB: ${POSTGRES_DB:-healthmonitor}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-monitor} -d ${POSTGRES_DB:-healthmonitor}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      HTTP_ADDR: ":8080"
+      DB_DRIVER: postgres
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-monitor}:${POSTGRES_PASSWORD:-monitor}@postgres:5432/${POSTGRES_DB:-healthmonitor}?sslmode=disable
+      WORKER_COUNT: ${WORKER_COUNT:-20}
+      SCHEDULER_TICK: ${SCHEDULER_TICK:-1s}
+      JOB_QUEUE_SIZE: ${JOB_QUEUE_SIZE:-512}
+      ALLOW_PRIVATE_TARGETS: ${ALLOW_PRIVATE_TARGETS:-true}
+      SEED_DEMO_ENDPOINTS: ${SEED_DEMO_ENDPOINTS:-true}
+      SEED_SELF_URL: http://monitor:8080/health
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET:-}
+      ALERT_COOLDOWN: ${ALERT_COOLDOWN:-5m}
+      ALERT_HIGH_LATENCY_MS: ${ALERT_HIGH_LATENCY_MS:-0}
+      API_KEY: ${API_KEY:-}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "${MONITOR_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    depends_on:
+      monitor:
+        condition: service_healthy
+    ports:
+      - "${DASHBOARD_PORT:-8090}:80"
+    restart: unless-stopped
+
+  heartbeatchecker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["heartbeatchecker"]
+    environment:
+      MONITOR_HEALTH_URL: http://monitor:8080/health
+      HC_INTERVAL: ${HC_INTERVAL:-5s}
+      HC_MISSES_THRESHOLD: ${HC_MISSES_THRESHOLD:-3}
+      HC_ALERT_WEBHOOK_URL: ${HC_ALERT_WEBHOOK_URL:-}
+      HC_ALERT_WEBHOOK_SECRET: ${HC_ALERT_WEBHOOK_SECRET:-}
+    depends_on:
+      monitor:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

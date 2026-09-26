@@ -1,0 +1,30 @@
+# Secrets and local environment
+.env
+
+# Databases
+*.db
+*.db-wal
+*.db-shm
+
+# Build artifacts
+/dist
+dashboard/dist
+dashboard/node_modules
+monitor
+heartbeatchecker
+loadbench
+*.exe
+
+# Coverage / test output
+coverage/
+*.out
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ZCode workspace file
+.zcodeignore
+*.tsbuildinfo
