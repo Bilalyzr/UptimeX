@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, buildQuery } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
+import { useAuth } from '../auth';
 import type { EngineStats, Incident, OverviewMetrics } from '../types';
 import { formatAge, formatDuration, formatMs, formatPct } from '../format';
 import { DistributionBars, LatencyTrend } from '../components/charts';
@@ -24,6 +25,7 @@ function uptimeTone(pct: number): string {
 
 export function Overview() {
   const [window, setWindow] = useState('1h');
+  const { me } = useAuth();
   const overview = usePolling<OverviewMetrics>(
     () => api.get(`/api/v1/metrics/overview${buildQuery({ window })}`),
     REFRESH_MS,
@@ -32,7 +34,9 @@ export function Overview() {
     () => api.get('/api/v1/incidents?status=open&limit=8'),
     REFRESH_MS,
   );
-  const stats = usePolling<EngineStats>(() => api.get('/api/v1/stats'), REFRESH_MS);
+  // /stats spans every tenant and is rejected (403) for session identities —
+  // don't poll it at all when signed in; only operators/legacy mode fetch it.
+  const stats = usePolling<EngineStats>(() => api.get('/api/v1/stats'), REFRESH_MS, !me);
 
   const ov = overview.data;
 
@@ -230,7 +234,7 @@ export function Overview() {
               <span className="profile-sec-icon"><IconMonitor size={16} /></span>
               Monitor self-observability
             </h3>
-            {stats.error ? (
+            {me || stats.error ? (
               <div className="empty">Engine stats span every tenant and are available to operators only.</div>
             ) : stats.data ? (
               <div className="grid grid-cards">

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 // usePolling fetches a resource on an interval with loading/error state and
 // cleanup. The fetcher is kept in a ref so re-renders never restart the loop.
-export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number) {
+// Pass enabled=false to skip the resource entirely (no request, no interval)
+// — used to avoid polling endpoints the current identity can never read.
+export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, enabled = true) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,10 +26,14 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number) {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     void tick();
     const id = window.setInterval(() => void tick(), intervalRef.current);
     return () => window.clearInterval(id);
-  }, [tick, intervalMs]);
+  }, [tick, intervalMs, enabled]);
 
   return { data, error, loading, refresh: tick };
 }
