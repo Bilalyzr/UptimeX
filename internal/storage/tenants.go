@@ -193,6 +193,60 @@ func (s *SQLStore) DeleteExpiredSessions(ctx context.Context) error {
 	return err
 }
 
+// UpdateUserPassword rotates the stored password hash.
+func (s *SQLStore) UpdateUserPassword(ctx context.Context, userID int64, passwordHash string) error {
+	res, err := s.db.ExecContext(ctx, s.q(`UPDATE users SET password_hash=? WHERE id=?`),
+		passwordHash, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListSessionsForUser returns the account's sessions oldest-first. The
+// token hash is used to mark the current session and is never serialized.
+func (s *SQLStore) ListSessionsForUser(ctx context.Context, userID int64) ([]models.Session, error) {
+	rows, err := s.db.QueryContext(ctx, s.q(`
+		SELECT token_hash, user_id, org_id, created_at, expires_at
+		FROM sessions WHERE user_id = ? ORDER BY created_at`), userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []models.Session{}
+	for rows.Next() {
+		var (
+			sess    models.Session
+			created nullTime
+			expires nullTime
+		)
+		if err := rows.Scan(&sess.TokenHash, &sess.UserID, &sess.OrgID, &created, &expires); err != nil {
+			return nil, err
+		}
+		sess.CreatedAt = created.Time.UTC()
+		sess.ExpiresAt = expires.Time.UTC()
+		out = append(out, sess)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSessionsForUserExcept revokes every session of the user except the
+// given token hash — the "log out other devices" primitive, also used after
+// a password change.
+func (s *SQLStore) DeleteSessionsForUserExcept(ctx context.Context, userID int64, keepTokenHash string) error {
+	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?`),
+		userID, keepTokenHash)
+	return err
+}
+
 // --- org-scoped analytics ----------------------------------------------------
 
 // CountEndpointsInOrg counts a tenant's endpoints (quota checks).

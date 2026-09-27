@@ -291,6 +291,111 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// currentTokenHash extracts the SHA-256 hex hash of the request's session
+// cookie, or "" when absent.
+func currentTokenHash(r *http.Request) string {
+	c, err := r.Cookie(middleware.SessionCookieName)
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(c.Value))
+	return hex.EncodeToString(sum[:])
+}
+
+type passwordChangePayload struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// ChangePassword rotates the account password after verifying the current
+// one, then revokes every other session — other devices must sign in again
+// with the new password.
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	id := middleware.IdentityFromContext(r.Context())
+	if id == nil || !id.Session {
+		writeError(w, http.StatusUnauthorized, "sign in required")
+		return
+	}
+	var p passwordChangePayload
+	if !decodeJSON(w, r, &p) {
+		return
+	}
+	if len(p.NewPassword) < 8 || len(p.NewPassword) > 200 {
+		writeError(w, http.StatusBadRequest, "new password must be between 8 and 200 characters")
+		return
+	}
+	user, err := h.Repo.GetUserByID(r.Context(), id.UserID)
+	if err != nil {
+		logInternalError(w, h.Logger, "password change: get user", err)
+		return
+	}
+	if !verifyPassword(p.CurrentPassword, user.PasswordHash) {
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+	hash, err := hashPassword(p.NewPassword)
+	if err != nil {
+		logInternalError(w, h.Logger, "password change: hash", err)
+		return
+	}
+	if err := h.Repo.UpdateUserPassword(r.Context(), id.UserID, hash); err != nil {
+		logInternalError(w, h.Logger, "password change: update", err)
+		return
+	}
+	if keep := currentTokenHash(r); keep != "" {
+		if err := h.Repo.DeleteSessionsForUserExcept(r.Context(), id.UserID, keep); err != nil {
+			h.Logger.Warn("revoke_sessions_after_password_change", "error", err)
+		}
+	}
+	h.Logger.Info("password_changed", "user_id", id.UserID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Sessions lists the account's active login sessions; the current one is
+// flagged. Token hashes are never exposed.
+func (h *AuthHandler) Sessions(w http.ResponseWriter, r *http.Request) {
+	id := middleware.IdentityFromContext(r.Context())
+	if id == nil || !id.Session {
+		writeError(w, http.StatusUnauthorized, "sign in required")
+		return
+	}
+	sessions, err := h.Repo.ListSessionsForUser(r.Context(), id.UserID)
+	if err != nil {
+		logInternalError(w, h.Logger, "sessions: list", err)
+		return
+	}
+	keep := currentTokenHash(r)
+	out := make([]map[string]any, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, map[string]any{
+			"created_at": s.CreatedAt,
+			"expires_at": s.ExpiresAt,
+			"current":    s.TokenHash == keep,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": out, "count": len(out)})
+}
+
+// RevokeOtherSessions logs out every device except the current one.
+func (h *AuthHandler) RevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	id := middleware.IdentityFromContext(r.Context())
+	if id == nil || !id.Session {
+		writeError(w, http.StatusUnauthorized, "sign in required")
+		return
+	}
+	keep := currentTokenHash(r)
+	if keep == "" {
+		writeError(w, http.StatusBadRequest, "no active session cookie")
+		return
+	}
+	if err := h.Repo.DeleteSessionsForUserExcept(r.Context(), id.UserID, keep); err != nil {
+		logInternalError(w, h.Logger, "sessions: revoke", err)
+		return
+	}
+	h.Logger.Info("other_sessions_revoked", "user_id", id.UserID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Me returns the signed-in user, organization and plan usage.
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	id := middleware.IdentityFromContext(r.Context())

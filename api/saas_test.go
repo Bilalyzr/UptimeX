@@ -301,3 +301,90 @@ func TestSaaSPublicStatusPage(t *testing.T) {
 		t.Fatal("disabled status page should 404")
 	}
 }
+
+func TestSaaSAccountSecurity(t *testing.T) {
+	s := newSaaSServer(t)
+
+	// Fresh account with two concurrent sessions (two devices).
+	main := &saasClient{s: s}
+	if resp, body := main.do("POST", "/api/v1/auth/signup", signupBody("sec@audit.test", "first-password-1", "Sec Corp")); resp.StatusCode != 201 {
+		t.Fatalf("signup = %d: %v", resp.StatusCode, body)
+	}
+	other := &saasClient{s: s}
+	if resp, body := other.do("POST", "/api/v1/auth/login", `{"email":"sec@audit.test","password":"first-password-1"}`); resp.StatusCode != 200 {
+		t.Fatalf("second device login = %d: %v", resp.StatusCode, body)
+	}
+
+	// Session list shows both, exactly one flagged current.
+	resp, body := main.do("GET", "/api/v1/auth/sessions", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("sessions = %d: %v", resp.StatusCode, body)
+	}
+	sessions := body["sessions"].([]any)
+	if len(sessions) != 2 {
+		t.Fatalf("session count = %d, want 2", len(sessions))
+	}
+	currents := 0
+	for _, raw := range sessions {
+		if raw.(map[string]any)["current"] == true {
+			currents++
+		}
+	}
+	if currents != 1 {
+		t.Fatalf("current-flagged sessions = %d, want 1", currents)
+	}
+	if sessions[0].(map[string]any)["token_hash"] != nil {
+		t.Fatal("token hashes must never be exposed")
+	}
+
+	// Password change rejects a wrong current password.
+	resp, body = main.do("PUT", "/api/v1/auth/password", `{"current_password":"WRONG","new_password":"second-password-2"}`)
+	if resp.StatusCode != 401 {
+		t.Fatalf("wrong current password = %d: %v", resp.StatusCode, body)
+	}
+	// And a too-short new password.
+	resp, _ = main.do("PUT", "/api/v1/auth/password", `{"current_password":"first-password-1","new_password":"short"}`)
+	if resp.StatusCode != 400 {
+		t.Fatalf("weak new password = %d, want 400", resp.StatusCode)
+	}
+
+	// Successful change keeps this device, revokes the other one.
+	resp, body = main.do("PUT", "/api/v1/auth/password", `{"current_password":"first-password-1","new_password":"second-password-2"}`)
+	if resp.StatusCode != 204 {
+		t.Fatalf("password change = %d: %v", resp.StatusCode, body)
+	}
+	if resp, _ := main.do("GET", "/api/v1/auth/me", ""); resp.StatusCode != 200 {
+		t.Fatal("current device must stay signed in")
+	}
+	if resp, _ := other.do("GET", "/api/v1/auth/me", ""); resp.StatusCode != 401 {
+		t.Fatal("other device must be revoked after password change")
+	}
+	// Old password no longer authenticates; the new one does.
+	resp, _ = main.do("POST", "/api/v1/auth/login", `{"email":"sec@audit.test","password":"first-password-1"}`)
+	if resp.StatusCode != 401 {
+		t.Fatal("old password must be rejected")
+	}
+	resp, _ = main.do("POST", "/api/v1/auth/login", `{"email":"sec@audit.test","password":"second-password-2"}`)
+	if resp.StatusCode != 200 {
+		t.Fatal("new password must authenticate")
+	}
+
+	// Revoke-others: log in twice again, then DELETE keeps only the caller.
+	other2 := &saasClient{s: s}
+	other2.do("POST", "/api/v1/auth/login", `{"email":"sec@audit.test","password":"second-password-2"}`)
+	if resp, _ := main.do("DELETE", "/api/v1/auth/sessions", ""); resp.StatusCode != 204 {
+		t.Fatal("revoke-others should return 204")
+	}
+	if resp, _ := other2.do("GET", "/api/v1/auth/me", ""); resp.StatusCode != 401 {
+		t.Fatal("other device must be revoked")
+	}
+	if resp, _ := main.do("GET", "/api/v1/auth/me", ""); resp.StatusCode != 200 {
+		t.Fatal("caller session must survive revoke-others")
+	}
+
+	// Unknown API paths answer with the JSON error contract.
+	resp, body = s.do("GET", "/api/v1/does-not-exist", "", nil)
+	if resp.StatusCode != 404 || body["error"] != "route not found" {
+		t.Fatalf("api 404 = %d %v, want JSON route-not-found", resp.StatusCode, body)
+	}
+}

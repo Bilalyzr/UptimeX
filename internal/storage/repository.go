@@ -80,6 +80,9 @@ type Repository interface {
 	GetSessionByTokenHash(ctx context.Context, tokenHash string) (*models.Session, error)
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error
 	DeleteExpiredSessions(ctx context.Context) error
+	UpdateUserPassword(ctx context.Context, userID int64, passwordHash string) error
+	ListSessionsForUser(ctx context.Context, userID int64) ([]models.Session, error)
+	DeleteSessionsForUserExcept(ctx context.Context, userID int64, keepTokenHash string) error
 
 	// Org-scoped analytics (org_id 0 never matches; legacy rows have NULL).
 	CountEndpointsInOrg(ctx context.Context, orgID int64) (int64, error)

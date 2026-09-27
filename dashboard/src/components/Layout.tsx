@@ -1,15 +1,40 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { Health } from '../types';
 import { formatDuration } from '../format';
 import { useAuth } from '../auth';
 import { Logo } from './Logo';
+import { BranchedMenu, type BranchedSection } from './BranchedMenu';
+import { IconAlert, IconCard, IconGlobe, IconGrid, IconUser } from './icons';
 
 export function Layout() {
   const [health, setHealth] = useState<Health | null>(null);
   const { me, signOut } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const sections: BranchedSection[] = [
+    {
+      label: 'Monitor',
+      children: [
+        { value: '/app', label: 'Overview', icon: <IconGrid size={15} /> },
+        { value: '/app/endpoints', label: 'Endpoints', icon: <IconGlobe size={15} /> },
+        { value: '/app/incidents', label: 'Incidents', icon: <IconAlert size={15} /> },
+      ],
+    },
+    ...(me
+      ? [
+          {
+            label: 'Account',
+            children: [
+              { value: '/app/billing', label: 'Billing & plans', icon: <IconCard size={15} /> },
+              { value: '/app/profile', label: 'Profile', icon: <IconUser size={15} /> },
+            ],
+          },
+        ]
+      : []),
+  ];
 
   useEffect(() => {
     const load = () =>
@@ -27,8 +52,6 @@ export function Layout() {
     navigate('/', { replace: true });
   };
 
-  const link = ({ isActive }: { isActive: boolean }) => `nav-link${isActive ? ' active' : ''}`;
-
   return (
     <div className="app">
       <aside className="sidebar">
@@ -36,23 +59,7 @@ export function Layout() {
           <Logo size={26} wordmark />
         </div>
 
-        <div className="side-label">Menu</div>
-        <nav className="side-nav">
-          <NavLink to="/app" end className={link}>
-            Overview
-          </NavLink>
-          <NavLink to="/app/endpoints" className={link}>
-            Endpoints
-          </NavLink>
-          <NavLink to="/app/incidents" className={link}>
-            Incidents
-          </NavLink>
-          {me && (
-            <NavLink to="/app/billing" className={link}>
-              Billing
-            </NavLink>
-          )}
-        </nav>
+        <BranchedMenu sections={sections} activePath={location.pathname} />
 
         <div className="sidebar-footer">
           {me ? (

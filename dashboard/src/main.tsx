@@ -17,6 +17,7 @@ const EndpointDetail = lazy(() =>
 );
 const Incidents = lazy(() => import('./pages/Incidents').then((m) => ({ default: m.Incidents })));
 const Billing = lazy(() => import('./pages/Billing').then((m) => ({ default: m.Billing })));
+const Profile = lazy(() => import('./pages/Profile').then((m) => ({ default: m.Profile })));
 const PublicStatus = lazy(() =>
   import('./pages/PublicStatus').then((m) => ({ default: m.PublicStatus })),
 );
@@ -47,9 +48,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               <Route index element={<Overview />} />
               <Route path="endpoints" element={<Endpoints />} />
               <Route path="endpoints/:id" element={<EndpointDetail />} />
-              <Route path="incidents" element={<Incidents />} />
-              <Route path="billing" element={<Billing />} />
-            </Route>
+            <Route path="incidents" element={<Incidents />} />
+            <Route path="billing" element={<Billing />} />
+            <Route path="profile" element={<Profile />} />
+          </Route>
             <Route path="/app/*" element={<Navigate to="/app" replace />} />
             <Route
               path="*"

@@ -55,6 +55,9 @@ func buildMux(d Deps) *http.ServeMux {
 		mux.HandleFunc("POST /api/v1/auth/login", d.Auth.Login)
 		mux.HandleFunc("POST /api/v1/auth/logout", d.Auth.Logout)
 		mux.Handle("GET /api/v1/auth/me", requireSession(d, d.Auth.Me))
+		mux.Handle("PUT /api/v1/auth/password", requireSession(d, d.Auth.ChangePassword))
+		mux.Handle("GET /api/v1/auth/sessions", requireSession(d, d.Auth.Sessions))
+		mux.Handle("DELETE /api/v1/auth/sessions", requireSession(d, d.Auth.RevokeOtherSessions))
 	}
 
 	if d.Public != nil {
@@ -86,6 +89,14 @@ func buildMux(d Deps) *http.ServeMux {
 	if d.Incidents != nil {
 		mux.Handle("GET /api/v1/incidents", open(d, d.Incidents.List))
 	}
+
+	// Unknown API paths answer with the JSON error contract instead of the
+	// Go default plain-text 404.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"route not found"}`))
+	})
 
 	return mux
 }

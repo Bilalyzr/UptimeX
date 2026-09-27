@@ -8,10 +8,6 @@ import { Logo } from '../components/Logo';
 import { Reveal } from '../components/Reveal';
 import { Globe } from '../components/Globe';
 
-// One ECG beat pattern, tiled across the strip width.
-const ECG_D =
-  'M0 30 H60 l8 -14 l9 26 l8 -12 H180 l8 -14 l9 26 l8 -12 H320 l8 -14 l9 26 l8 -12 H460 l8 -14 l9 26 l8 -12 H640';
-
 const plans = [
   {
     id: 'free',
@@ -259,10 +255,18 @@ export function Landing() {
       <section className="hero">
         <div className="hero-copy">
           <div className="hero-eyebrow">Distributed health &amp; uptime monitoring</div>
-          <h1>
-            Know it&apos;s down
-            <br />
-            before your users do.
+          <h1 className="hero-title">
+            <span className="hero-line">Know it&apos;s</span>
+            <span className="hero-line">
+              <span className="mark">
+                down
+                <svg className="mark-svg" viewBox="0 0 120 12" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M2 8 Q 60 1 118 6" />
+                </svg>
+              </span>{' '}
+              before
+            </span>
+            <span className="hero-line">your users do.</span>
           </h1>
           <p className="hero-sub">
             UptimeX probes your endpoints around the clock, separates transient blips from real
@@ -276,66 +280,40 @@ export function Landing() {
               See a live status page
             </Link>
           </div>
+          <p className="hero-trust mono">No credit card · 5 free monitors · live in 60 seconds</p>
           <div className="hero-stats">
-            <div>
+            <div className="hero-stat">
               <strong>10s</strong>
               <span>fastest checks</span>
             </div>
-            <div>
+            <div className="hero-stat">
               <strong>1000+</strong>
               <span>endpoints per org</span>
             </div>
-            <div>
+            <div className="hero-stat">
               <strong>P99</strong>
               <span>tail latency built-in</span>
             </div>
           </div>
         </div>
 
-        <div className="hero-mock" aria-hidden="true">
-          <div className="mock-window">
-            <div className="mock-titlebar">
-              <span /> <span /> <span /> <em>UptimeX · Live network</em>
-            </div>
-            <div className="mock-body">
-              <div className="globe-stage">
-                <Globe size={300} />
-                <div className="globe-chip globe-chip-a">
-                  <strong>99.98%</strong> uptime 24h
-                </div>
-                <div className="globe-chip globe-chip-b">
-                  <strong>184ms</strong> P95 latency
-                </div>
-                <div className="globe-chip globe-chip-c">
-                  <strong className="mock-ok">0</strong> open incidents
-                </div>
-              </div>
-              <div className="ecg-strip" aria-hidden="true">
-                <svg viewBox="0 0 640 60" preserveAspectRatio="none">
-                  <path className="ecg-base" d={ECG_D} fill="none" />
-                  <path className="ecg-live" d={ECG_D} fill="none" />
-                </svg>
-              </div>
-              <div className="mock-rows">
-                <div className="mock-row">
-                  <span className="mock-dot mock-dot-ok" /> Payments API
-                  <em>99.99% · 142ms</em>
-                </div>
-                <div className="mock-row">
-                  <span className="mock-dot mock-dot-ok" /> Auth Service
-                  <em>99.97% · 96ms</em>
-                </div>
-                <div className="mock-row">
-                  <span className="mock-dot mock-dot-warn" /> CDN Edge
-                  <em>99.71% · 210ms</em>
-                </div>
-                <div className="mock-row">
-                  <span className="mock-dot mock-dot-ok" /> Docs Site
-                  <em>100% · 58ms</em>
-                </div>
-              </div>
-            </div>
+        <div className="hero-scene" aria-hidden="true">
+          <div className="hero-scene-glow" />
+          <Globe size={520} />
+          <div className="scene-chip scene-chip-a">
+            <strong>99.98%</strong> uptime 24h
           </div>
+          <div className="scene-chip scene-chip-b">
+            <strong>184ms</strong> P95 latency
+          </div>
+          <div className="scene-chip scene-chip-c">
+            <strong>0</strong> open incidents
+          </div>
+        </div>
+
+        <div className="scroll-cue" aria-hidden="true">
+          <span className="mono">scroll</span>
+          <i />
         </div>
       </section>
 
