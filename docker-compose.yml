@@ -53,6 +53,11 @@ services:
       ALERT_HIGH_LATENCY_MS: ${ALERT_HIGH_LATENCY_MS:-0}
       API_KEY: ${API_KEY:-}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
+      # SaaS layer (accounts, orgs, plans, public status pages). false runs
+      # the single-tenant operator mode.
+      SAAS_MODE: ${SAAS_MODE:-false}
+      SESSION_TTL: ${SESSION_TTL:-168h}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
     depends_on:
       postgres:
         condition: service_healthy
