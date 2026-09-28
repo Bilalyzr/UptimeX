@@ -124,6 +124,11 @@ MONITOR_HEALTH_URL=http://localhost:8080/health go run ./cmd/heartbeatchecker
 
 > Note for Windows hosts: if port 8080 is taken, set `HTTP_ADDR=:8010` (and
 > `VITE_MONITOR_URL=http://localhost:8010` for the dashboard dev proxy).
+>
+> If another stack already publishes 8080/8090 on this machine, copy
+> `.env.example` to `.env` and override the host ports there — compose reads
+> `.env` automatically:
+> `MONITOR_PORT=18080` / `DASHBOARD_PORT=18090`.
 
 ## Testing
 
