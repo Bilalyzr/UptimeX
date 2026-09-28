@@ -183,15 +183,13 @@ func TestSaaSOrgIsolationAndQuota(t *testing.T) {
 		t.Fatalf("created endpoint must carry org_id: %v", body)
 	}
 
-	// Fill the free quota (5 total).
-	for i := 1; i < 5; i++ {
-		Ep := fmt.Sprintf(`{"name":"api-%d","url":%q,"interval_seconds":60}`, i, s.target.URL)
-		if resp, body := acme.do("POST", "/api/v1/endpoints", Ep); resp.StatusCode != 201 {
-			t.Fatalf("fill %d = %d: %v", i, resp.StatusCode, body)
-		}
+	// Fill the free quota (2 total).
+	second := fmt.Sprintf(`{"name":"api-1","url":%q,"interval_seconds":60}`, s.target.URL)
+	if resp, body := acme.do("POST", "/api/v1/endpoints", second); resp.StatusCode != 201 {
+		t.Fatalf("fill second = %d: %v", resp.StatusCode, body)
 	}
-	sixth := fmt.Sprintf(`{"name":"overflow","url":%q,"interval_seconds":60}`, s.target.URL)
-	resp, body = acme.do("POST", "/api/v1/endpoints", sixth)
+	third := fmt.Sprintf(`{"name":"overflow","url":%q,"interval_seconds":60}`, s.target.URL)
+	resp, body = acme.do("POST", "/api/v1/endpoints", third)
 	if resp.StatusCode != http.StatusForbidden || !strings.Contains(body["error"].(string), "limit") {
 		t.Fatalf("quota = %d: %v", resp.StatusCode, body)
 	}
@@ -214,7 +212,7 @@ func TestSaaSOrgIsolationAndQuota(t *testing.T) {
 		t.Fatalf("beta overview = %d %v", resp.StatusCode, body)
 	}
 	resp, body = acme.do("GET", "/api/v1/metrics/overview?window=1h", "")
-	if body["endpoints"].(map[string]any)["total"].(float64) != 5 {
+	if body["endpoints"].(map[string]any)["total"].(float64) != 2 {
 		t.Fatalf("acme overview total = %v", body["endpoints"])
 	}
 

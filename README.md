@@ -58,8 +58,8 @@ turns on:
   sessions are random 256-bit tokens in HttpOnly cookies (only SHA-256 hashes
   are stored). Every endpoint, incident and metric is scoped to the caller's
   organization; one tenant can never read another's data.
-- **Plans & quotas** — Free ($0: 5 endpoints, 60s interval), Pro ($20/mo: 50,
-  30s) and Business ($99/mo: 250, 10s). Quotas and interval floors are
+- **Plans & quotas** — Free (₹0: 2 endpoints, 60s interval), Pro (₹1,499/mo: 50,
+  30s) and Business (₹7,999/mo: 250, 10s). Quotas and interval floors are
   enforced server-side on create/update (`internal/plans`).
 - **Billing** — `GET/POST /api/v1/org*` serves the plan catalog, live usage
   and plan changes. Plan switching is immediate (demo billing); the handler

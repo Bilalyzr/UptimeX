@@ -25,9 +25,9 @@ const CurrencyINR = "INR"
 var catalog = []Plan{
 	{
 		ID: models.PlanFree, Name: "Free", PriceMonthlyCents: 0, Currency: CurrencyINR,
-		MaxEndpoints: 5, MinIntervalSeconds: 60, HistoryDays: 7,
+		MaxEndpoints: 2, MinIntervalSeconds: 60, HistoryDays: 7,
 		Features: []string{
-			"5 monitored endpoints",
+			"2 monitored endpoints",
 			"60-second check interval",
 			"7-day metrics history",
 			"Email + webhook alerts",

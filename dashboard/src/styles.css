@@ -1758,14 +1758,14 @@ textarea:focus {
 .hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(380px, 0.95fr) minmax(460px, 1.25fr);
-  gap: 40px;
-  align-items: center;
+  grid-template-columns: minmax(0, 880px);
+  justify-content: center;
+  text-align: center;
   max-width: 1280px;
   margin: 0 auto;
   /* clears the floating pill nav (per sticky-nav guidance: never overlap
      the first section's content) */
-  padding: 108px 36px 72px;
+  padding: 116px 36px 72px;
 }
 
 /* Staggered headline reveals. */
@@ -1828,6 +1828,7 @@ textarea:focus {
 /* Stat rail: hairline-divided columns (matches the Overview hero rail). */
 .hero-stats {
   display: flex;
+  justify-content: center;
   margin-top: 34px;
 }
 .hero-stat {
@@ -1921,77 +1922,16 @@ textarea:focus {
   font-size: 16.5px;
   line-height: 1.65;
   max-width: 54ch;
-  margin: 0 0 30px;
+  margin: 0 auto 30px;
   animation: heroLineIn 0.7s 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .hero-actions {
   display: flex;
+  justify-content: center;
   gap: 12px;
   flex-wrap: wrap;
   animation: heroLineIn 0.7s 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-/* Hero 3D scene: standalone observatory globe + floating glass chips. */
-.hero-scene {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: fadeUp 0.6s 0.15s ease both;
-}
-.hero-scene-glow {
-  position: absolute;
-  inset: 4%;
-  background:
-    radial-gradient(closest-side, rgba(38, 244, 208, 0.16), transparent 70%),
-    radial-gradient(closest-side at 60% 40%, rgba(114, 76, 232, 0.08), transparent 75%);
-  pointer-events: none;
-}
-.globe-canvas {
-  position: relative;
-}
-
-.scene-chip {
-  position: absolute;
-  background: var(--surface);
-  border: 1px solid var(--border-ink);
-  border-radius: var(--pill);
-  padding: 6px 15px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--muted);
-  font-family: var(--mono);
-  box-shadow: 4px 4px 0 rgba(10, 9, 15, 0.12);
-  animation: chipFloat 4.5s ease-in-out infinite;
-}
-.scene-chip strong {
-  color: var(--ink);
-  font-size: 13px;
-  margin-right: 5px;
-}
-.scene-chip-a {
-  top: 7%;
-  left: 0;
-  animation-delay: 0s;
-}
-.scene-chip-b {
-  top: 46%;
-  right: -1%;
-  animation-delay: 1.4s;
-}
-.scene-chip-c {
-  bottom: 6%;
-  left: 8%;
-  animation-delay: 2.8s;
-}
-@keyframes chipFloat {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
 }
 
 .landing-section {
@@ -2451,24 +2391,152 @@ textarea:focus {
   line-height: 1.65;
 }
 
+/* --- closing CTA band: inverted ink terminal panel ------------------------------ */
+
 .cta-band {
-  text-align: center;
-  padding: 80px 32px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 36px;
+  padding: 64px 56px 84px;
   margin: 32px 36px 0;
   border: 1px solid var(--ink);
   border-radius: 28px;
+  overflow: hidden;
   background:
-    radial-gradient(640px 240px at 50% 0%, rgba(38, 244, 208, 0.14), transparent 70%),
-    var(--surface);
-  box-shadow: 8px 8px 0 rgba(10, 9, 15, 0.9);
+    radial-gradient(700px 280px at 78% -10%, rgba(38, 244, 208, 0.12), transparent 65%),
+    var(--ink);
+  color: var(--bg);
+}
+
+.cta-corner {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: var(--mint);
+  opacity: 0.9;
+}
+.c-tl { top: 12px; left: 12px; border-top: 1.5px solid; border-left: 1.5px solid; }
+.c-tr { top: 12px; right: 12px; border-top: 1.5px solid; border-right: 1.5px solid; }
+.c-bl { bottom: 12px; left: 12px; border-bottom: 1.5px solid; border-left: 1.5px solid; }
+.c-br { bottom: 12px; right: 12px; border-bottom: 1.5px solid; border-right: 1.5px solid; }
+
+.cta-copy {
+  max-width: 34em;
+}
+.cta-eyebrow {
+  font-size: 13px;
+  color: var(--mint);
+  margin-bottom: 16px;
+}
+.cta-eyebrow::after {
+  content: '▍';
+  animation: ctaBlink 1s steps(1) infinite;
+  color: var(--mint);
+}
+@keyframes ctaBlink {
+  50% {
+    opacity: 0;
+  }
 }
 .cta-band h2 {
-  margin: 0 0 8px;
-  font-size: 36px;
+  margin: 0 0 10px;
+  font-size: clamp(30px, 4vw, 44px);
+  color: var(--bg);
+  letter-spacing: -0.02em;
 }
 .cta-band p {
-  color: var(--muted);
-  margin: 0 0 26px;
+  color: rgba(239, 239, 229, 0.65);
+  margin: 0;
+  font-size: 15px;
+}
+
+.cta-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  flex: none;
+}
+.cta-btn {
+  background: var(--mint);
+  border-color: var(--mint);
+  color: var(--ink);
+  font-weight: 700;
+  box-shadow: 0 6px 22px rgba(38, 244, 208, 0.35);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
+}
+.cta-btn:hover {
+  color: var(--ink);
+  filter: brightness(1.05);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(38, 244, 208, 0.45);
+}
+.cta-note {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: rgba(239, 239, 229, 0.5);
+}
+
+.cta-pulse {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 44px;
+  opacity: 0.9;
+}
+.cta-pulse-base {
+  fill: none;
+  stroke: rgba(239, 239, 229, 0.14);
+  stroke-width: 1.5;
+}
+.cta-pulse-live {
+  fill: none;
+  stroke: var(--mint);
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 5px rgba(38, 244, 208, 0.6));
+  stroke-dasharray: 170 3400;
+  animation: ctaSweep 4.2s linear infinite;
+}
+@keyframes ctaSweep {
+  from {
+    stroke-dashoffset: 3570;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .cta-band {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 44px 28px 76px;
+    margin: 24px 16px 0;
+  }
+  .cta-action {
+    align-items: flex-start;
+    width: 100%;
+  }
+  .cta-btn {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cta-pulse-live,
+  .cta-eyebrow::after {
+    animation: none;
+    opacity: 0.55;
+  }
 }
 
 .landing-footer {
@@ -2903,25 +2971,6 @@ textarea:focus {
   .hero-trust {
     text-align: center;
   }
-  .scene-chip {
-    font-size: 10.5px;
-    padding: 4px 12px;
-  }
-  .scene-chip strong {
-    font-size: 12px;
-  }
-  .scene-chip-a {
-    top: 2%;
-    left: 2%;
-  }
-  .scene-chip-b {
-    top: 50%;
-    right: 0;
-  }
-  .scene-chip-c {
-    bottom: 0;
-    left: 4%;
-  }
   .page-title {
     font-size: 24px;
   }
@@ -2958,12 +3007,17 @@ textarea:focus {
   .footer-wordmark {
     font-size: clamp(52px, 17vw, 88px);
   }
-  /* Wide tables scroll inside their card instead of breaking the layout. */
-  .card:has(table) {
+  /* Wide tables scroll inside their container instead of breaking the
+     layout — dashboard cards and the public status box alike. */
+  .card:has(table),
+  .status-box:has(table) {
     overflow-x: auto;
   }
   table {
     min-width: 620px;
+  }
+  .status-box table {
+    min-width: 560px;
   }
 }
 

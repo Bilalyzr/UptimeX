@@ -6,7 +6,6 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../auth';
 import { Logo } from '../components/Logo';
 import { Reveal } from '../components/Reveal';
-import { Globe } from '../components/Globe';
 
 const plans = [
   {
@@ -16,7 +15,7 @@ const plans = [
     period: 'forever',
     tagline: 'Side projects and personal sites.',
     features: [
-      '5 monitored endpoints',
+      '2 monitored endpoints',
       '60-second check interval',
       '7-day metrics history',
       'Email + webhook alerts',
@@ -189,6 +188,10 @@ const NAV_SECTIONS = [
   { id: 'faq', label: 'FAQ' },
 ];
 
+// Closing-band ECG: one beat pattern tiled across the section width.
+const CTA_ECG =
+  'M0 20 H90 l10 -14 l12 26 l10 -12 H300 l10 -14 l12 26 l10 -12 H600 l10 -14 l12 26 l10 -12 H900 l10 -14 l12 26 l10 -12 H1200';
+
 export function Landing() {
   const { me } = useAuth();
   const [active, setActive] = useState('');
@@ -280,7 +283,7 @@ export function Landing() {
               See a live status page
             </Link>
           </div>
-          <p className="hero-trust mono">No credit card · 5 free monitors · live in 60 seconds</p>
+          <p className="hero-trust mono">No credit card · 2 free monitors · live in 60 seconds</p>
           <div className="hero-stats">
             <div className="hero-stat">
               <strong>10s</strong>
@@ -294,20 +297,6 @@ export function Landing() {
               <strong>P99</strong>
               <span>tail latency built-in</span>
             </div>
-          </div>
-        </div>
-
-        <div className="hero-scene" aria-hidden="true">
-          <div className="hero-scene-glow" />
-          <Globe size={520} />
-          <div className="scene-chip scene-chip-a">
-            <strong>99.98%</strong> uptime 24h
-          </div>
-          <div className="scene-chip scene-chip-b">
-            <strong>184ms</strong> P95 latency
-          </div>
-          <div className="scene-chip scene-chip-c">
-            <strong>0</strong> open incidents
           </div>
         </div>
 
@@ -409,7 +398,7 @@ export function Landing() {
                 </div>
                 <p className="price-tagline">{p.tagline}</p>
                 <div className="price-meta">
-                  <span>{p.id === 'free' ? '5' : p.id === 'pro' ? '50' : '250'} monitors</span>
+                  <span>{p.id === 'free' ? '2' : p.id === 'pro' ? '50' : '250'} monitors</span>
                   <i />
                   <span>
                     {p.id === 'free' ? '60s' : p.id === 'pro' ? '30s' : '10s'} fastest checks
@@ -485,12 +474,26 @@ export function Landing() {
       </section>
 
       <Reveal>
-        <section className="cta-band">
-          <h2>Your endpoints are due a check.</h2>
-          <p>Five monitors, zero credit card, sixty seconds to first signal.</p>
-          <Link className="btn btn-cta btn-lg" to="/signup">
-            Create your workspace →
-          </Link>
+        <section className="cta-band" aria-label="Get started">
+          <span className="cta-corner c-tl" aria-hidden="true" />
+          <span className="cta-corner c-tr" aria-hidden="true" />
+          <span className="cta-corner c-bl" aria-hidden="true" />
+          <span className="cta-corner c-br" aria-hidden="true" />
+          <div className="cta-copy">
+            <div className="cta-eyebrow mono">$ uptime start --free</div>
+            <h2>Your endpoints are due a check.</h2>
+            <p>Two monitors, zero credit card, sixty seconds to first signal.</p>
+          </div>
+          <div className="cta-action">
+            <Link className="btn cta-btn btn-lg" to="/signup">
+              Create your workspace →
+            </Link>
+            <span className="cta-note mono">no card · cancel anytime · ₹0 floor</span>
+          </div>
+          <svg className="cta-pulse" viewBox="0 0 1200 40" preserveAspectRatio="none" aria-hidden="true">
+            <path className="cta-pulse-base" d={CTA_ECG} />
+            <path className="cta-pulse-live" d={CTA_ECG} />
+          </svg>
         </section>
       </Reveal>
 
