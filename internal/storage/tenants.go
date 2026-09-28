@@ -253,7 +253,7 @@ func (s *SQLStore) DeleteSessionsForUserExcept(ctx context.Context, userID int64
 func (s *SQLStore) CountEndpointsInOrg(ctx context.Context, orgID int64) (int64, error) {
 	var n int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM endpoints WHERE org_id = ?`, orgID).Scan(&n)
+		s.q(`SELECT COUNT(*) FROM endpoints WHERE org_id = ?`), orgID).Scan(&n)
 	return n, err
 }
 
