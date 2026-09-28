@@ -68,6 +68,11 @@ func hashPassword(password string) (string, error) {
 		base64.RawStdEncoding.EncodeToString(key)), nil
 }
 
+// dummyVerifyHash equalizes login timing: verified on unknown-email
+// attempts so an attacker cannot enumerate accounts by response time
+// (known-email attempts pay the full PBKDF2 cost).
+var dummyVerifyHash, _ = hashPassword("uptimex-timing-equalizer")
+
 // verifyPassword checks a password against a stored digest in constant time.
 func verifyPassword(password, stored string) bool {
 	parts := strings.Split(stored, "$")
@@ -254,8 +259,14 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := h.Repo.GetUserByEmail(r.Context(), p.Email)
-	if errors.Is(err, storage.ErrNotFound) || (err == nil && !verifyPassword(p.Password, user.PasswordHash)) {
-		// Same error for unknown email and wrong password.
+	if errors.Is(err, storage.ErrNotFound) {
+		// Unknown email: still pay the PBKDF2 cost against the dummy digest
+		// so response timing cannot distinguish existing accounts.
+		verifyPassword(p.Password, dummyVerifyHash)
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+	if err == nil && !verifyPassword(p.Password, user.PasswordHash) {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}

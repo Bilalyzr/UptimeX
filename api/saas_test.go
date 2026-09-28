@@ -388,3 +388,21 @@ func TestSaaSAccountSecurity(t *testing.T) {
 		t.Fatalf("api 404 = %d %v, want JSON route-not-found", resp.StatusCode, body)
 	}
 }
+
+func TestSaaSAuthRateLimit(t *testing.T) {
+	s := newSaaSServer(t)
+	c := &saasClient{s: s}
+
+	// Hammer the credential endpoint well past the strict burst; the dummy
+	// PBKDF2 on unknown emails also equalizes timing per request.
+	got429 := 0
+	for i := 0; i < 10; i++ {
+		resp, _ := c.do("POST", "/api/v1/auth/login", `{"email":"nobody@x.io","password":"whatever123"}`)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			got429++
+		}
+	}
+	if got429 == 0 {
+		t.Fatal("credential endpoints must enforce a strict per-IP budget")
+	}
+}

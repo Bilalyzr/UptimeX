@@ -43,6 +43,13 @@ func New(d Deps) http.Handler {
 	return h
 }
 
+// Credential-route budget: sustained 1 request per 2 seconds per IP with a
+// small burst — generous for humans, hostile to online password guessing.
+const (
+	authRouteRPS   = 0.5
+	authRouteBurst = 5
+)
+
 // buildMux registers all routes. Separated from New so tests can reuse it.
 func buildMux(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
@@ -51,8 +58,12 @@ func buildMux(d Deps) *http.ServeMux {
 	mux.HandleFunc("GET /ready", d.Health.Readiness)
 
 	if d.Auth != nil {
-		mux.HandleFunc("POST /api/v1/auth/signup", d.Auth.Signup)
-		mux.HandleFunc("POST /api/v1/auth/login", d.Auth.Login)
+		// Credential endpoints carry a dedicated strict per-IP limiter on top
+		// of the global one: online password guessing and account-creation
+		// spam must not be bounded only by the (much higher) API budget.
+		authLimit := middleware.NewRateLimit(authRouteRPS, authRouteBurst, nil)
+		mux.Handle("POST /api/v1/auth/signup", authLimit.Wrap(http.HandlerFunc(d.Auth.Signup)))
+		mux.Handle("POST /api/v1/auth/login", authLimit.Wrap(http.HandlerFunc(d.Auth.Login)))
 		mux.HandleFunc("POST /api/v1/auth/logout", d.Auth.Logout)
 		mux.Handle("GET /api/v1/auth/me", requireSession(d, d.Auth.Me))
 		mux.Handle("PUT /api/v1/auth/password", requireSession(d, d.Auth.ChangePassword))

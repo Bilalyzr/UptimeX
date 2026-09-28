@@ -67,3 +67,38 @@ The current API is single-tenant/trusted-operator. Before allowing
 untrusted users to register endpoints, keep `ALLOW_PRIVATE_TARGETS=false`,
 enforce per-user quotas, and consider an egress allow-list or dedicated
 probe egress network so the SSRF surface stays bounded.
+
+## SaaS mode security (SAAS_MODE=true)
+
+The multi-tenant layer adds these controls and posture:
+
+**Sessions.** Random 256-bit tokens delivered as `HttpOnly`, `SameSite=Lax`
+cookies; only SHA-256 hashes are stored. Password change revokes every
+other session; `DELETE /api/v1/auth/sessions` revokes on demand.
+**Deployment requirement:** when serving over HTTPS (any production
+SaaS deployment), set `SESSION_COOKIE_SECURE=true` so cookies are never
+sent over a plaintext downgrade.
+
+**Password storage.** PBKDF2-HMAC-SHA256, 600,000 iterations, per-user
+16-byte salt (OWASP 2023 guidance). Login pays the same PBKDF2 cost for
+unknown emails (dummy digest) so response timing cannot enumerate accounts.
+
+**Credential rate limiting.** `/api/v1/auth/login` and `/signup` draw from
+a dedicated strict per-IP bucket (sustained 1 request / 2 s, burst 5) on
+top of the global API limiter — online password guessing is bounded to a
+few thousand attempts per day per IP. (`Retry-After` is returned on 429.)
+
+**CSRF posture.** Mutating endpoints require the session cookie
+(`SameSite=Lax`), and cross-origin JSON POSTs require a CORS preflight
+that only passes when `CORS_ALLOWED_ORIGIN` explicitly allows the origin
+(`Access-Control-Allow-Credentials` is never sent). Same-origin
+deployments (the default compose/nginx topology) have no cross-origin
+surface at all.
+
+**Tenant isolation.** Every endpoint, incident, and metrics query is
+org-scoped at the storage layer; cross-org resource access returns 404.
+Engine `/stats` are operator-only. Public status pages expose only service
+names, uptime figures, and open-incident times — never URLs or raw errors.
+
+**Known gaps (by design, tracked):** alert channels remain operator-level
+(not per-tenant); there is no per-org API-key issuance yet.

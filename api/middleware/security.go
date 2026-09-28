@@ -105,6 +105,19 @@ func NewRateLimit(rps float64, burst int, next http.Handler) *RateLimit {
 }
 
 func (m *RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.check(w, r, m.Next)
+}
+
+// Wrap returns a handler that draws from this limiter's shared per-client
+// buckets but dispatches to the given next handler — used to bind one
+// strict budget across a route group (e.g. every credential endpoint).
+func (m *RateLimit) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.check(w, r, next)
+	})
+}
+
+func (m *RateLimit) check(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	client, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		client = r.RemoteAddr
@@ -134,5 +147,5 @@ func (m *RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
 		return
 	}
-	m.Next.ServeHTTP(w, r)
+	next.ServeHTTP(w, r)
 }
