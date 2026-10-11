@@ -3,6 +3,7 @@
 // feature table); the hero visual is a CSS/SVG dashboard mockup.
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import Lenis from 'lenis';
 import { useAuth } from '../auth';
 import { Logo } from '../components/Logo';
 import { Reveal } from '../components/Reveal';
@@ -196,6 +197,24 @@ export function Landing() {
   const { me } = useAuth();
   const [active, setActive] = useState('');
   const [scrolled, setScrolled] = useState(false);
+
+  // Smooth scrolling (Lenis): inertial wheel scrolling on the marketing
+  // page only — the dashboard keeps native scrolling for its data tables.
+  // Skipped entirely for prefers-reduced-motion users.
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const lenis = new Lenis({ lerp: 0.09, wheelMultiplier: 1 });
+    let raf = 0;
+    const frame = (t: number) => {
+      lenis.raf(t);
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(raf);
+      lenis.destroy();
+    };
+  }, []);
 
   // Scrollspy: highlight the nav link of the section in view.
   useEffect(() => {
@@ -520,33 +539,6 @@ export function Landing() {
             <Link to="/status/acme-corp">Status demo</Link>
           </div>
           <div className="footer-col">
-            <h4>Resources</h4>
-            <a href="https://github.com/Bilalyzr/UptimeX/blob/main/docs/API.md" target="_blank" rel="noreferrer">
-              API reference ↗
-            </a>
-            <a
-              href="https://github.com/Bilalyzr/UptimeX/blob/main/docs/ARCHITECTURE.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Architecture ↗
-            </a>
-            <a
-              href="https://github.com/Bilalyzr/UptimeX/blob/main/docs/BENCHMARKS.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Benchmarks ↗
-            </a>
-            <a
-              href="https://github.com/Bilalyzr/UptimeX/blob/main/docs/SECURITY.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Security ↗
-            </a>
-          </div>
-          <div className="footer-col">
             <h4>Account</h4>
             <Link to="/login">Sign in</Link>
             <Link to="/signup">Create workspace</Link>
@@ -555,9 +547,6 @@ export function Landing() {
         </div>
         <div className="footer-bottom">
           <span>© 2026 UptimeX — uptime monitoring that pages you once</span>
-          <a href="https://github.com/Bilalyzr/UptimeX" target="_blank" rel="noreferrer">
-            GitHub ↗
-          </a>
         </div>
       </footer>
     </div>

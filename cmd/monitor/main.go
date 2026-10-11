@@ -93,7 +93,13 @@ func run() error {
 		}, logger)
 
 	if cfg.SeedDemo {
-		seedDemoEndpoints(logger, store, cfg)
+		if cfg.API.SAASMode {
+			// SaaS mode: seed the public demo tenant (powers /status/acme-corp
+			// and the landing page's status demo link on a fresh database).
+			seedDemoOrg(logger, store, cfg)
+		} else {
+			seedDemoEndpoints(logger, store, cfg)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,4 +211,49 @@ func seedDemoEndpoints(logger *slog.Logger, store storage.Repository, cfg *confi
 		}
 		logger.Info("seeded_demo_endpoint", "id", e.ID, "name", e.Name, "url", e.URL)
 	}
+}
+
+// seedDemoOrg creates the public demo tenant on an empty SaaS database so
+// the /status/acme-corp page (linked from the landing) always resolves.
+// The org has no login — it exists purely as a public status showcase.
+func seedDemoOrg(logger *slog.Logger, store storage.Repository, cfg *config.Config) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := store.GetOrganizationBySlug(ctx, "acme-corp"); err == nil {
+		return // already seeded
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		logger.Warn("seed_org_lookup_failed", "error", err)
+		return
+	}
+
+	org := &models.Organization{
+		Name: "Acme Corp", Slug: "acme-corp",
+		Plan: models.PlanFree, StatusPageEnabled: true,
+	}
+	if err := store.CreateOrganization(ctx, org); err != nil {
+		logger.Warn("seed_org_create_failed", "error", err)
+		return
+	}
+
+	selfURL := os.Getenv("SEED_SELF_URL")
+	if selfURL == "" {
+		// Derive from the actual bind address so the heartbeat targets THIS
+		// monitor instead of a hardcoded port.
+		selfURL = "http://localhost" + cfg.HTTPAddr + "/health"
+	}
+	demo := []models.Endpoint{
+		{Name: "Monitor Self (heartbeat)", URL: selfURL, Method: "GET", IntervalSeconds: 60,
+			TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true},
+		{Name: "Example.com", URL: "https://example.com", Method: "GET", IntervalSeconds: 60,
+			TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true},
+	}
+	for i := range demo {
+		demo[i].OrgID = &org.ID
+		if err := store.CreateEndpoint(ctx, &demo[i]); err != nil {
+			logger.Warn("seed_org_endpoint_failed", "name", demo[i].Name, "error", err)
+			continue
+		}
+	}
+	logger.Info("seeded_demo_org", "org_id", org.ID, "slug", org.Slug, "endpoints", len(demo))
 }
