@@ -258,3 +258,77 @@ func TestMigrationIdempotence(t *testing.T) {
 		t.Fatalf("count after reopen = %d (%v)", n, err)
 	}
 }
+
+func TestRetentionPruneChecksBeforeAndByOrgPlan(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	sc := 200
+
+	// 1. Global retention (PruneChecksBefore).
+	epGlobal := mustEndpoint(t, s, "global-ep")
+	_, _ = s.InsertCheck(ctx, models.CheckResult{
+		EndpointID: epGlobal.ID, CheckedAt: now.Add(-100 * 24 * time.Hour),
+		StatusCode: &sc, ResponseTimeMs: 40, Success: true,
+	})
+	_, _ = s.InsertCheck(ctx, models.CheckResult{
+		EndpointID: epGlobal.ID, CheckedAt: now.Add(-1 * time.Hour),
+		StatusCode: &sc, ResponseTimeMs: 30, Success: true,
+	})
+	deleted, err := s.PruneChecksBefore(ctx, now.Add(-90*24*time.Hour))
+	if err != nil || deleted != 1 {
+		t.Fatalf("PruneChecksBefore deleted=%d err=%v, want 1", deleted, err)
+	}
+
+	// 2. Per-org plan retention (Free = 7d, Business = 90d).
+	freeOrg := &models.Organization{Name: "Free Org", Slug: "free-org", Plan: models.PlanFree, StatusPageEnabled: true}
+	freeUser := &models.User{Email: "free@org.test", PasswordHash: "x", Role: models.RoleOwner}
+	if err := s.CreateOrganizationWithOwner(ctx, freeOrg, freeUser); err != nil {
+		t.Fatalf("create free org: %v", err)
+	}
+	bizOrg := &models.Organization{Name: "Biz Org", Slug: "biz-org", Plan: models.PlanBusiness, StatusPageEnabled: true}
+	bizUser := &models.User{Email: "biz@org.test", PasswordHash: "x", Role: models.RoleOwner}
+	if err := s.CreateOrganizationWithOwner(ctx, bizOrg, bizUser); err != nil {
+		t.Fatalf("create biz org: %v", err)
+	}
+
+	epFree := &models.Endpoint{
+		OrgID: &freeOrg.ID, Name: "free-ep", URL: "https://example.com", Method: "GET",
+		IntervalSeconds: 60, TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true,
+	}
+	epBiz := &models.Endpoint{
+		OrgID: &bizOrg.ID, Name: "biz-ep", URL: "https://example.com", Method: "GET",
+		IntervalSeconds: 10, TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true,
+	}
+	if err := s.CreateEndpoint(ctx, epFree); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateEndpoint(ctx, epBiz); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both orgs have a 20-day-old check; Free (7d) must be pruned, Business (90d) must survive.
+	_, _ = s.InsertCheck(ctx, models.CheckResult{
+		EndpointID: epFree.ID, CheckedAt: now.Add(-20 * 24 * time.Hour),
+		StatusCode: &sc, ResponseTimeMs: 50, Success: true,
+	})
+	_, _ = s.InsertCheck(ctx, models.CheckResult{
+		EndpointID: epBiz.ID, CheckedAt: now.Add(-20 * 24 * time.Hour),
+		StatusCode: &sc, ResponseTimeMs: 50, Success: true,
+	})
+	cutoffs := map[string]time.Time{
+		models.PlanFree:     now.Add(-7 * 24 * time.Hour),
+		models.PlanPro:      now.Add(-30 * 24 * time.Hour),
+		models.PlanBusiness: now.Add(-90 * 24 * time.Hour),
+	}
+	pruned, err := s.PruneChecksByOrgPlan(ctx, cutoffs, now.Add(-90*24*time.Hour))
+	if err != nil || pruned != 1 {
+		t.Fatalf("PruneChecksByOrgPlan pruned=%d err=%v, want 1", pruned, err)
+	}
+
+	freeChecks, _ := s.ListChecks(ctx, epFree.ID, now.Add(-60*24*time.Hour), 10)
+	bizChecks, _ := s.ListChecks(ctx, epBiz.ID, now.Add(-60*24*time.Hour), 10)
+	if len(freeChecks) != 0 || len(bizChecks) != 1 {
+		t.Fatalf("freeChecks=%d (want 0), bizChecks=%d (want 1)", len(freeChecks), len(bizChecks))
+	}
+}

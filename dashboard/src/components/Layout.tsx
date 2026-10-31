@@ -1,15 +1,18 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { api } from '../api/client';
+import { api, getStoredApiKey, setStoredApiKey } from '../api/client';
 import type { Health } from '../types';
 import { formatDuration } from '../format';
 import { useAuth } from '../auth';
 import { Logo } from './Logo';
 import { BranchedMenu, type BranchedSection } from './BranchedMenu';
-import { IconAlert, IconCard, IconGlobe, IconGrid, IconUser } from './icons';
+import { IconAlert, IconBell, IconCard, IconGlobe, IconGrid, IconUser } from './icons';
 
 export function Layout() {
   const [health, setHealth] = useState<Health | null>(null);
+  const [apiKeyDraft, setApiKeyDraft] = useState(() => getStoredApiKey());
+  const [editingKey, setEditingKey] = useState(false);
+  const [hasStoredKey, setHasStoredKey] = useState(() => getStoredApiKey() !== '');
   const { me, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,6 +24,7 @@ export function Layout() {
         { value: '/app', label: 'Overview', icon: <IconGrid size={15} /> },
         { value: '/app/endpoints', label: 'Endpoints', icon: <IconGlobe size={15} /> },
         { value: '/app/incidents', label: 'Incidents', icon: <IconAlert size={15} /> },
+        ...(me ? [{ value: '/app/alerts', label: 'Alerts', icon: <IconBell size={15} /> }] : []),
       ],
     },
     ...(me
@@ -78,8 +82,58 @@ export function Layout() {
               </button>
             </div>
           ) : (
-            <div className="user-card muted" style={{ fontSize: 12 }}>
-              Operator mode — no account session.
+            <div className="user-card" style={{ fontSize: 12 }}>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <span className="muted">Operator mode</span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setApiKeyDraft(getStoredApiKey());
+                    setEditingKey((v) => !v);
+                  }}
+                >
+                  {hasStoredKey ? 'API key ✓' : 'Set API key'}
+                </button>
+              </div>
+              {editingKey && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    setStoredApiKey(apiKeyDraft);
+                    setHasStoredKey(apiKeyDraft.trim() !== '');
+                    setEditingKey(false);
+                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                >
+                  <input
+                    type="password"
+                    value={apiKeyDraft}
+                    onChange={(e) => setApiKeyDraft(e.target.value)}
+                    placeholder="X-API-Key header value"
+                    aria-label="Operator API key"
+                  />
+                  <div className="row" style={{ gap: 6 }}>
+                    <button type="submit" className="btn btn-sm btn-primary" style={{ flex: 1 }}>
+                      Save
+                    </button>
+                    {hasStoredKey && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          setStoredApiKey('');
+                          setApiKeyDraft('');
+                          setHasStoredKey(false);
+                          setEditingKey(false);
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </form>
+              )}
             </div>
           )}
           <div className="health-card">

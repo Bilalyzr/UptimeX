@@ -10,12 +10,12 @@ cd /d "%~dp0"
 if not exist dev-data mkdir dev-data
 
 echo [1/2] Building + starting the monitor API on http://localhost:8010 ...
-start "UptimeX monitor" cmd /k "cd /d "%~dp0" && go build -o "%TEMP%\uptimex-monitor.exe" ./cmd/monitor && DB_DRIVER=sqlite SQLITE_PATH=%~dp0dev-data\uptimex.db HTTP_ADDR=:8010 SAAS_MODE=true ALLOW_PRIVATE_TARGETS=true SEED_DEMO_ENDPOINTS=true "%TEMP%\uptimex-monitor.exe""
+start "UptimeX monitor" cmd /k "cd /d "%~dp0" && go build -o "%TEMP%\uptimex-monitor.exe" ./cmd/monitor && set "DB_DRIVER=sqlite" && set "SQLITE_PATH=%~dp0dev-data\uptimex.db" && set "HTTP_ADDR=:8010" && set "SAAS_MODE=true" && set "ALLOW_PRIVATE_TARGETS=true" && set "SEED_DEMO_ENDPOINTS=true" && set "PUBLIC_URL=http://localhost:7777" && "%TEMP%\uptimex-monitor.exe""
 
 timeout /t 3 /nobreak >nul
 
 echo [2/2] Starting the dashboard on http://localhost:7777 ...
-start "UptimeX dashboard" cmd /k "cd /d "%~dp0dashboard" && set VITE_MONITOR_URL=http://localhost:8010 && node_modules\.bin\vite --port 7777 --strictPort"
+start "UptimeX dashboard" cmd /k "cd /d "%~dp0dashboard" && set "VITE_MONITOR_URL=http://localhost:8010" && node .\node_modules\vite\bin\vite.js --port 7777 --strictPort"
 
 echo.
 echo   Site    : http://localhost:7777

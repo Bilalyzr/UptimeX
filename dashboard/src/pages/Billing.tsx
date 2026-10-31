@@ -12,6 +12,7 @@ export function Billing() {
   const [data, setData] = useState<OrgResponse | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [planError, setPlanError] = useState('');
   const [busyPlan, setBusyPlan] = useState('');
 
   const load = useCallback(() => {
@@ -29,6 +30,7 @@ export function Billing() {
   const changePlan = (planId: string) => {
     setBusyPlan(planId);
     setNotice('');
+    setPlanError('');
     api
       .post<{ org: OrgResponse['org'] }>('/api/v1/org/plan', { plan_id: planId })
       .then(() => {
@@ -36,7 +38,7 @@ export function Billing() {
         load();
         void refresh();
       })
-      .catch((e) => setNotice(e instanceof ApiError ? e.message : String(e)))
+      .catch((e) => setPlanError(e instanceof ApiError ? e.message : String(e)))
       .finally(() => setBusyPlan(''));
   };
 
@@ -96,7 +98,8 @@ export function Billing() {
             )}
           </div>
         </div>
-        {notice && <div className="error-banner" style={{ marginTop: 12 }}>{notice}</div>}
+        {notice && <div className="notice-banner" style={{ marginTop: 12, marginBottom: 0 }}>{notice}</div>}
+        {planError && <div className="error-banner" style={{ marginTop: 12, marginBottom: 0 }}>{planError}</div>}
       </div>
 
       <div className="pricing-grid pricing-inline">

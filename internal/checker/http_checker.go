@@ -26,22 +26,9 @@ type HTTPChecker struct {
 // NewHTTPChecker builds a checker. The dialer enforces the SSRF policy at
 // connect time (see Guard.Control).
 func NewHTTPChecker(guard *Guard) *HTTPChecker {
-	dialer := &net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: 30 * time.Second,
-		Control:   guard.Control,
-	}
-	transport := &http.Transport{
-		DialContext:         dialer.DialContext,
-		MaxIdleConns:        200,
-		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-		ForceAttemptHTTP2:   true,
-	}
 	return &HTTPChecker{
 		client: &http.Client{
-			Transport: transport,
+			Transport: guard.SafeTransport(),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return errors.New("stopped after 5 redirects")
@@ -51,6 +38,13 @@ func NewHTTPChecker(guard *Guard) *HTTPChecker {
 		},
 		guard: guard,
 	}
+}
+
+var blockedCustomHeaders = map[string]bool{
+	"host":              true,
+	"connection":        true,
+	"transfer-encoding": true,
+	"content-length":    true,
 }
 
 // Check performs one probe. It never returns an error and never panics; every
@@ -78,7 +72,11 @@ func (c *HTTPChecker) Check(ctx context.Context, ep models.Endpoint) models.Chec
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(ep.Method), ep.URL, nil)
+	var reqBody io.Reader
+	if ep.Body != "" {
+		reqBody = strings.NewReader(ep.Body)
+	}
+	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(ep.Method), ep.URL, reqBody)
 	if err != nil {
 		res.ErrorType = models.ErrTypeInvalidURL
 		res.ErrorMessage = "invalid request: " + err.Error()
@@ -86,6 +84,13 @@ func (c *HTTPChecker) Check(ctx context.Context, ep models.Endpoint) models.Chec
 	}
 	req.Header.Set("User-Agent", version.ServiceName+"/"+version.Version)
 	req.Header.Set("Accept", "*/*")
+	for k, v := range ep.Headers {
+		cleanKey := strings.TrimSpace(k)
+		if cleanKey == "" || blockedCustomHeaders[strings.ToLower(cleanKey)] {
+			continue
+		}
+		req.Header.Set(cleanKey, v)
+	}
 
 	start := time.Now()
 	resp, err := c.client.Do(req)
@@ -97,18 +102,24 @@ func (c *HTTPChecker) Check(ctx context.Context, ep models.Endpoint) models.Chec
 		return res
 	}
 
-	// Drain a bounded amount of the body so the connection can be reused.
+	// Read up to 64 KiB so keyword assertions work and the connection can be reused.
+	sampled, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	_ = resp.Body.Close()
 
 	code := resp.StatusCode
 	res.StatusCode = &code
-	if code >= ep.ExpectedStatusMin && code <= ep.ExpectedStatusMax {
-		res.Success = true
+	if code < ep.ExpectedStatusMin || code > ep.ExpectedStatusMax {
+		res.ErrorType = models.ErrTypeHTTPError
+		res.ErrorMessage = sanitizeHTTPError(ep.ExpectedStatusMin, ep.ExpectedStatusMax, code)
 		return res
 	}
-	res.ErrorType = models.ErrTypeHTTPError
-	res.ErrorMessage = sanitizeHTTPError(ep.ExpectedStatusMin, ep.ExpectedStatusMax, code)
+	if ep.ExpectedBodyContains != "" && !strings.Contains(string(sampled), ep.ExpectedBodyContains) {
+		res.ErrorType = models.ErrTypeBodyMismatch
+		res.ErrorMessage = "response body missing expected keyword"
+		return res
+	}
+	res.Success = true
 	return res
 }
 

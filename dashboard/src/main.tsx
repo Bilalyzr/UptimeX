@@ -10,12 +10,19 @@ import { RequireAuth } from './components/RequireAuth';
 const Landing = lazy(() => import('./pages/Landing').then((m) => ({ default: m.Landing })));
 const Login = lazy(() => import('./pages/Auth').then((m) => ({ default: m.Login })));
 const Signup = lazy(() => import('./pages/Auth').then((m) => ({ default: m.Signup })));
+const ForgotPassword = lazy(() =>
+  import('./pages/Auth').then((m) => ({ default: m.ForgotPassword })),
+);
+const ResetPassword = lazy(() =>
+  import('./pages/Auth').then((m) => ({ default: m.ResetPassword })),
+);
 const Overview = lazy(() => import('./pages/Overview').then((m) => ({ default: m.Overview })));
 const Endpoints = lazy(() => import('./pages/Endpoints').then((m) => ({ default: m.Endpoints })));
 const EndpointDetail = lazy(() =>
   import('./pages/EndpointDetail').then((m) => ({ default: m.EndpointDetail })),
 );
 const Incidents = lazy(() => import('./pages/Incidents').then((m) => ({ default: m.Incidents })));
+const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
 const Billing = lazy(() => import('./pages/Billing').then((m) => ({ default: m.Billing })));
 const Profile = lazy(() => import('./pages/Profile').then((m) => ({ default: m.Profile })));
 const PublicStatus = lazy(() =>
@@ -36,6 +43,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/status/:slug" element={<PublicStatus />} />
             <Route
               path="/app"
@@ -48,10 +57,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               <Route index element={<Overview />} />
               <Route path="endpoints" element={<Endpoints />} />
               <Route path="endpoints/:id" element={<EndpointDetail />} />
-            <Route path="incidents" element={<Incidents />} />
-            <Route path="billing" element={<Billing />} />
-            <Route path="profile" element={<Profile />} />
-          </Route>
+              <Route path="incidents" element={<Incidents />} />
+              <Route path="alerts" element={<Alerts />} />
+              <Route path="billing" element={<Billing />} />
+              <Route path="profile" element={<Profile />} />
+            </Route>
             <Route path="/app/*" element={<Navigate to="/app" replace />} />
             <Route
               path="*"

@@ -1,8 +1,15 @@
 .git
 .env
+.env.*
+.deploy/
+dev-data/
 *.db
 *.db-wal
 *.db-shm
+*.exe
+/monitor
+/heartbeatchecker
+/loadbench
 dashboard/node_modules
 dashboard/dist
 dashboard/coverage

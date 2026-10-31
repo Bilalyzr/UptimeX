@@ -161,3 +161,65 @@ func TestPostgresIncidentGuarantees(t *testing.T) {
 		t.Fatalf("list: %+v (%v)", list, err)
 	}
 }
+
+func TestPostgresSaaSFeaturesAndRetention(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	org := &models.Organization{Name: "PG Tenant", Slug: "pg-tenant", Plan: models.PlanFree, StatusPageEnabled: true}
+	user := &models.User{Email: "pg@tenant.test", PasswordHash: "hash1", Name: "PG Owner", Role: models.RoleOwner}
+	if err := s.CreateOrganizationWithOwner(ctx, org, user); err != nil {
+		t.Fatalf("CreateOrganizationWithOwner: %v", err)
+	}
+
+	ch := &models.AlertChannel{OrgID: org.ID, Name: "Webhook", Type: models.AlertChannelWebhook, Target: "https://example.com/hook", Secret: "sec", Enabled: true}
+	if err := s.CreateAlertChannel(ctx, ch); err != nil {
+		t.Fatalf("CreateAlertChannel: %v", err)
+	}
+	channels, err := s.ListAlertChannelsByOrg(ctx, org.ID, true)
+	if err != nil || len(channels) != 1 || !channels[0].HasSecret {
+		t.Fatalf("ListAlertChannelsByOrg: %+v (%v)", channels, err)
+	}
+
+	key := &models.APIKey{OrgID: org.ID, Name: "CI", KeyPrefix: "upx_12345678", TokenHash: "deadbeef"}
+	if err := s.CreateAPIKey(ctx, key); err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	if gotKey, err := s.GetAPIKeyByHash(ctx, "deadbeef"); err != nil || gotKey.OrgID != org.ID {
+		t.Fatalf("GetAPIKeyByHash: %+v (%v)", gotKey, err)
+	}
+
+	rt := &models.PasswordResetToken{TokenHash: "resethash", UserID: user.ID, CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+	if err := s.CreatePasswordResetToken(ctx, rt); err != nil {
+		t.Fatalf("CreatePasswordResetToken: %v", err)
+	}
+	if uid, err := s.ConsumePasswordResetToken(ctx, "resethash", "hash2"); err != nil || uid != user.ID {
+		t.Fatalf("ConsumePasswordResetToken: uid=%d err=%v", uid, err)
+	}
+
+	ep := &models.Endpoint{
+		OrgID: &org.ID, Name: "pg-ep", URL: "https://example.com", Method: "POST",
+		Headers: map[string]string{"X-Test": "1"}, Body: `{"a":1}`, ExpectedBodyContains: "ok",
+		IntervalSeconds: 60, TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true,
+	}
+	if err := s.CreateEndpoint(ctx, ep); err != nil {
+		t.Fatalf("CreateEndpoint with custom probe fields: %v", err)
+	}
+	loadedEp, err := s.GetEndpoint(ctx, ep.ID)
+	if err != nil || loadedEp.ExpectedBodyContains != "ok" || loadedEp.Headers["X-Test"] != "1" {
+		t.Fatalf("custom probe roundtrip: %+v (%v)", loadedEp, err)
+	}
+
+	sc := 200
+	_, _ = s.InsertCheck(ctx, models.CheckResult{
+		EndpointID: ep.ID, CheckedAt: now.Add(-15 * 24 * time.Hour),
+		StatusCode: &sc, ResponseTimeMs: 25, Success: true,
+	})
+	pruned, err := s.PruneChecksByOrgPlan(ctx, map[string]time.Time{
+		models.PlanFree: now.Add(-7 * 24 * time.Hour),
+	}, now.Add(-90*24*time.Hour))
+	if err != nil || pruned != 1 {
+		t.Fatalf("PruneChecksByOrgPlan: pruned=%d err=%v", pruned, err)
+	}
+}

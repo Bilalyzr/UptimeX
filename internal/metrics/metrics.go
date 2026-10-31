@@ -100,6 +100,9 @@ func SummarizeLatency(values []int64) LatencyStats {
 // Buckets follow the dashboard requirements: exact 200/201, families for the
 // rest, timeout and network/config errors separated (PRD §24).
 func BucketStatus(statusCode int64, errorType string) string {
+	if errorType == models.ErrTypeBodyMismatch {
+		return models.ErrTypeBodyMismatch
+	}
 	if statusCode == 0 {
 		switch errorType {
 		case models.ErrTypeTimeout:

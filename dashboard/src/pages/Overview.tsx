@@ -229,43 +229,45 @@ export function Overview() {
           </div>
 
           {/* Monitor self-observability (operator-only API) */}
-          <div className="card" style={{ marginTop: 16 }}>
-            <h3 className="profile-sec-title">
-              <span className="profile-sec-icon"><IconMonitor size={16} /></span>
-              Monitor self-observability
-            </h3>
-            {me || stats.error ? (
-              <div className="empty">Engine stats span every tenant and are available to operators only.</div>
-            ) : stats.data ? (
-              <div className="grid grid-cards">
-                <div className="ov-mini">
-                  <span className="ov-mini-label">Checks attempted</span>
-                  <strong className="mono">{stats.data.checks_attempted}</strong>
-                  <span className="muted">since {formatAge(stats.data.started_at)}</span>
+          {!me && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <h3 className="profile-sec-title">
+                <span className="profile-sec-icon"><IconMonitor size={16} /></span>
+                Monitor self-observability
+              </h3>
+              {stats.error ? (
+                <ErrorBanner message={stats.error} />
+              ) : stats.data ? (
+                <div className="grid grid-cards">
+                  <div className="ov-mini">
+                    <span className="ov-mini-label">Checks attempted</span>
+                    <strong className="mono">{stats.data.checks_attempted}</strong>
+                    <span className="muted">since {formatAge(stats.data.started_at)}</span>
+                  </div>
+                  <div className="ov-mini">
+                    <span className="ov-mini-label">Succeeded</span>
+                    <strong className="mono" style={{ color: 'var(--green)' }}>{stats.data.checks_succeeded}</strong>
+                  </div>
+                  <div className="ov-mini">
+                    <span className="ov-mini-label">Failed</span>
+                    <strong className="mono" style={{ color: 'var(--red)' }}>{stats.data.checks_failed}</strong>
+                  </div>
+                  <div className="ov-mini">
+                    <span className="ov-mini-label">Worker pool</span>
+                    <strong className="mono">{stats.data.pool.active_workers}/{stats.data.pool.workers}</strong>
+                    <span className="muted">active / total</span>
+                  </div>
+                  <div className="ov-mini">
+                    <span className="ov-mini-label">Queue depth</span>
+                    <strong className="mono">{stats.data.pool.queue_depth}</strong>
+                    <span className="muted">{stats.data.scheduler.duplicates_skipped} duplicates prevented</span>
+                  </div>
                 </div>
-                <div className="ov-mini">
-                  <span className="ov-mini-label">Succeeded</span>
-                  <strong className="mono" style={{ color: 'var(--green)' }}>{stats.data.checks_succeeded}</strong>
-                </div>
-                <div className="ov-mini">
-                  <span className="ov-mini-label">Failed</span>
-                  <strong className="mono" style={{ color: 'var(--red)' }}>{stats.data.checks_failed}</strong>
-                </div>
-                <div className="ov-mini">
-                  <span className="ov-mini-label">Worker pool</span>
-                  <strong className="mono">{stats.data.pool.active_workers}/{stats.data.pool.workers}</strong>
-                  <span className="muted">active / total</span>
-                </div>
-                <div className="ov-mini">
-                  <span className="ov-mini-label">Queue depth</span>
-                  <strong className="mono">{stats.data.pool.queue_depth}</strong>
-                  <span className="muted">{stats.data.scheduler.duplicates_skipped} duplicates prevented</span>
-                </div>
-              </div>
-            ) : (
-              <div className="loading skeleton" />
-            )}
-          </div>
+              ) : (
+                <div className="loading skeleton" />
+              )}
+            </div>
+          )}
         </>
       ) : (
         <div className="loading skeleton" />

@@ -39,7 +39,7 @@ const plans = [
       'HMAC-signed webhook alerts',
       'Public status page',
     ],
-    cta: 'Start 14-day trial',
+    cta: 'Choose Pro',
     highlight: true,
   },
   {
@@ -56,7 +56,7 @@ const plans = [
       'Self-monitoring heartbeat watchdog',
       'Priority support',
     ],
-    cta: 'Start 14-day trial',
+    cta: 'Choose Business',
     highlight: false,
   },
 ];
@@ -309,7 +309,7 @@ export function Landing() {
               <span>fastest checks</span>
             </div>
             <div className="hero-stat">
-              <strong>1000+</strong>
+              <strong>250</strong>
               <span>endpoints per org</span>
             </div>
             <div className="hero-stat">
@@ -447,7 +447,7 @@ export function Landing() {
             <span className="pricing-includes-title">Every plan ships with</span>
             <span>Public status pages</span>
             <i>·</i>
-            <span>HMAC-signed webhooks</span>
+            <span>Email + webhook alerts</span>
             <i>·</i>
             <span>SSRF-guarded probes</span>
             <i>·</i>

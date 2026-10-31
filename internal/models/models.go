@@ -21,16 +21,19 @@ const (
 
 // Endpoint is a monitored target registered through the API.
 type Endpoint struct {
-	ID                int64  `json:"id"`
-	Name              string `json:"name"`
-	URL               string `json:"url"`
-	Method            string `json:"method"`
-	IntervalSeconds   int    `json:"interval_seconds"`
-	TimeoutMs         int    `json:"timeout_ms"`
-	FailureThreshold  int    `json:"failure_threshold"`
-	ExpectedStatusMin int    `json:"expected_status_min"`
-	ExpectedStatusMax int    `json:"expected_status_max"`
-	Enabled           bool   `json:"enabled"`
+	ID                   int64             `json:"id"`
+	Name                 string            `json:"name"`
+	URL                  string            `json:"url"`
+	Method               string            `json:"method"`
+	Headers              map[string]string `json:"headers,omitempty"`
+	Body                 string            `json:"body,omitempty"`
+	ExpectedBodyContains string            `json:"expected_body_contains,omitempty"`
+	IntervalSeconds      int               `json:"interval_seconds"`
+	TimeoutMs            int               `json:"timeout_ms"`
+	FailureThreshold     int               `json:"failure_threshold"`
+	ExpectedStatusMin    int               `json:"expected_status_min"`
+	ExpectedStatusMax    int               `json:"expected_status_max"`
+	Enabled              bool              `json:"enabled"`
 	// OrgID owns the endpoint in SaaS mode; nil marks pre-SaaS global
 	// endpoints owned by the operator (legacy API-key scope).
 	OrgID     *int64    `json:"org_id,omitempty"`
@@ -95,14 +98,15 @@ const (
 
 // Error types recorded on failed checks (PRD §18.2).
 const (
-	ErrTypeTimeout    = "timeout"
-	ErrTypeDNS        = "dns"
-	ErrTypeConnection = "connection"
-	ErrTypeTLS        = "tls"
-	ErrTypeHTTPError  = "http_error"
-	ErrTypeBlocked    = "blocked"     // SSRF guard rejected the target
-	ErrTypeInvalidURL = "invalid_url" // malformed or unsupported URL
-	ErrTypeCanceled   = "canceled"
+	ErrTypeTimeout      = "timeout"
+	ErrTypeDNS          = "dns"
+	ErrTypeConnection   = "connection"
+	ErrTypeTLS          = "tls"
+	ErrTypeHTTPError    = "http_error"
+	ErrTypeBodyMismatch = "body_mismatch"
+	ErrTypeBlocked      = "blocked"     // SSRF guard rejected the target
+	ErrTypeInvalidURL   = "invalid_url" // malformed or unsupported URL
+	ErrTypeCanceled     = "canceled"
 )
 
 // AlertType classifies outbound alert notifications.
@@ -113,6 +117,7 @@ const (
 	AlertRecovered   AlertType = "RECOVERED"
 	AlertMonitorDown AlertType = "MONITOR_DOWN"
 	AlertHighLatency AlertType = "HIGH_LATENCY"
+	AlertTest        AlertType = "TEST"
 )
 
 // IncidentDetail is an incident joined with its endpoint for list views.
@@ -128,6 +133,7 @@ type Alert struct {
 	EndpointID   int64      `json:"endpoint_id,omitempty"`
 	EndpointName string     `json:"endpoint_name,omitempty"`
 	URL          string     `json:"url,omitempty"`
+	DashboardURL string     `json:"dashboard_url,omitempty"`
 	FailureCount int        `json:"failure_count,omitempty"`
 	LastStatus   *int       `json:"last_status_code,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`

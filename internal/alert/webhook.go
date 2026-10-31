@@ -17,11 +17,13 @@ import (
 
 // WebhookConfig configures the webhook channel.
 type WebhookConfig struct {
-	URL      string
-	Secret   string // optional; enables HMAC-SHA256 signing
-	Timeout  time.Duration
-	Attempts int // bounded retries
-	Backoff  time.Duration
+	Name      string // optional channel label (defaults to "webhook")
+	URL       string
+	Secret    string // optional; enables HMAC-SHA256 signing
+	Timeout   time.Duration
+	Attempts  int // bounded retries
+	Backoff   time.Duration
+	Transport http.RoundTripper // optional SSRF-guarded transport
 }
 
 // WebhookChannel POSTs alerts as JSON. When a secret is configured the body
@@ -33,6 +35,9 @@ type WebhookChannel struct {
 
 // NewWebhookChannel builds the channel with its own bounded client.
 func NewWebhookChannel(cfg WebhookConfig) *WebhookChannel {
+	if cfg.Name == "" {
+		cfg.Name = "webhook"
+	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Second
 	}
@@ -44,11 +49,11 @@ func NewWebhookChannel(cfg WebhookConfig) *WebhookChannel {
 	}
 	return &WebhookChannel{
 		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.Timeout},
+		client: &http.Client{Timeout: cfg.Timeout, Transport: cfg.Transport},
 	}
 }
 
-func (w *WebhookChannel) Name() string { return "webhook" }
+func (w *WebhookChannel) Name() string { return w.cfg.Name }
 
 // Send delivers the alert with bounded retries. A 2xx response is success;
 // anything else is an error (recorded by the manager, never fatal).

@@ -1,7 +1,9 @@
 # Secrets and local environment
 .env
+.deploy/
 
 # Databases
+dev-data/
 *.db
 *.db-wal
 *.db-shm

@@ -21,12 +21,14 @@ type Deps struct {
 	Repo      storage.Repository // identity resolution (sessions, orgs)
 	Health    *handlers.HealthHandler
 	// Filled in by later phases; nil handlers are simply not registered.
-	Endpoints *handlers.EndpointHandler
-	Metrics   *handlers.MetricsHandler
-	Incidents *handlers.IncidentHandler
-	Auth      *handlers.AuthHandler
-	Org       *handlers.OrgHandler
-	Public    *handlers.PublicHandler
+	Endpoints     *handlers.EndpointHandler
+	Metrics       *handlers.MetricsHandler
+	Incidents     *handlers.IncidentHandler
+	Auth          *handlers.AuthHandler
+	Org           *handlers.OrgHandler
+	Public        *handlers.PublicHandler
+	AlertChannels *handlers.AlertChannelHandler
+	APIKeys       *handlers.APIKeyHandler
 }
 
 // New builds the root http.Handler. Middleware runs outermost-first:
@@ -34,7 +36,13 @@ type Deps struct {
 func New(d Deps) http.Handler {
 	mux := buildMux(d)
 	var h http.Handler = mux
-	h = middleware.NewRateLimit(d.APIConfig.RateLimitRPS, d.APIConfig.RateLimitBurst, h)
+	rl := middleware.NewRateLimit(d.APIConfig.RateLimitRPS, d.APIConfig.RateLimitBurst, h)
+	rl.TrustProxy = d.APIConfig.TrustProxyHeaders
+	rl.ExemptPaths = map[string]bool{
+		"/health": true,
+		"/ready":  true,
+	}
+	h = rl
 	if d.APIConfig.CORSAllowedOrigin != "" {
 		h = &middleware.CORS{AllowedOrigin: d.APIConfig.CORSAllowedOrigin, Next: h}
 	}
@@ -47,7 +55,7 @@ func New(d Deps) http.Handler {
 // small burst — generous for humans, hostile to online password guessing.
 const (
 	authRouteRPS   = 0.5
-	authRouteBurst = 5
+	authRouteBurst = 7
 )
 
 // buildMux registers all routes. Separated from New so tests can reuse it.
@@ -62,10 +70,14 @@ func buildMux(d Deps) *http.ServeMux {
 		// of the global one: online password guessing and account-creation
 		// spam must not be bounded only by the (much higher) API budget.
 		authLimit := middleware.NewRateLimit(authRouteRPS, authRouteBurst, nil)
+		authLimit.TrustProxy = d.APIConfig.TrustProxyHeaders
 		mux.Handle("POST /api/v1/auth/signup", authLimit.Wrap(http.HandlerFunc(d.Auth.Signup)))
 		mux.Handle("POST /api/v1/auth/login", authLimit.Wrap(http.HandlerFunc(d.Auth.Login)))
+		mux.Handle("POST /api/v1/auth/forgot-password", authLimit.Wrap(http.HandlerFunc(d.Auth.ForgotPassword)))
+		mux.Handle("POST /api/v1/auth/reset-password", authLimit.Wrap(http.HandlerFunc(d.Auth.ResetPassword)))
 		mux.HandleFunc("POST /api/v1/auth/logout", d.Auth.Logout)
 		mux.Handle("GET /api/v1/auth/me", requireSession(d, d.Auth.Me))
+		mux.Handle("PATCH /api/v1/auth/me", requireSession(d, d.Auth.UpdateProfile))
 		mux.Handle("PUT /api/v1/auth/password", requireSession(d, d.Auth.ChangePassword))
 		mux.Handle("GET /api/v1/auth/sessions", requireSession(d, d.Auth.Sessions))
 		mux.Handle("DELETE /api/v1/auth/sessions", requireSession(d, d.Auth.RevokeOtherSessions))
@@ -79,6 +91,21 @@ func buildMux(d Deps) *http.ServeMux {
 		mux.Handle("GET /api/v1/org", requireSession(d, d.Org.Get))
 		mux.Handle("PATCH /api/v1/org", requireSession(d, d.Org.Update))
 		mux.Handle("POST /api/v1/org/plan", requireSession(d, d.Org.ChangePlan))
+	}
+
+	if d.AlertChannels != nil {
+		mux.Handle("GET /api/v1/alert-channels", authed(d, d.AlertChannels.List))
+		mux.Handle("POST /api/v1/alert-channels", authed(d, d.AlertChannels.Create))
+		mux.Handle("PATCH /api/v1/alert-channels/{id}", authed(d, d.AlertChannels.Update))
+		mux.Handle("DELETE /api/v1/alert-channels/{id}", authed(d, d.AlertChannels.Delete))
+		mux.Handle("POST /api/v1/alert-channels/{id}/test", authed(d, d.AlertChannels.Test))
+	}
+
+	if d.APIKeys != nil {
+		mux.Handle("GET /api/v1/api-keys", requireSession(d, d.APIKeys.List))
+		mux.Handle("POST /api/v1/api-keys", requireSession(d, d.APIKeys.Create))
+		mux.Handle("DELETE /api/v1/api-keys", http.NotFoundHandler())
+		mux.Handle("DELETE /api/v1/api-keys/{id}", requireSession(d, d.APIKeys.Delete))
 	}
 
 	if d.Endpoints != nil {

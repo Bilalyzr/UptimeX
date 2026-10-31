@@ -1,12 +1,16 @@
 package alert
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -145,5 +149,132 @@ func TestManagerContinuesAfterChannelFailure(t *testing.T) {
 	}
 	if st := m.Stats(); st.FailedByChannel["recording"] != 1 {
 		t.Fatalf("failure not counted: %+v", st)
+	}
+}
+
+func TestManagerRecoveryResetsDownCooldown(t *testing.T) {
+	rec := &recordingChannel{}
+	m := NewManager([]Channel{rec}, 10*time.Minute, logging.NewForTest())
+	ctx := context.Background()
+
+	m.Dispatch(ctx, models.Alert{Type: models.AlertDown, EndpointID: 7})
+	m.Dispatch(ctx, models.Alert{Type: models.AlertRecovered, EndpointID: 7})
+	// Immediate second outage inside the 10-minute cooldown must still fire
+	// because RECOVERED cleared the prior outage's DOWN cooldown key.
+	m.Dispatch(ctx, models.Alert{Type: models.AlertDown, EndpointID: 7})
+
+	if len(rec.got) != 3 {
+		t.Fatalf("delivered %d alerts after recovery, want 3: %+v", len(rec.got), rec.got)
+	}
+}
+
+func TestEmailChannelDeliveryAndRetry(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var (
+		mu          sync.Mutex
+		connections int
+		messages    []string
+	)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			connections++
+			attempt := connections
+			mu.Unlock()
+
+			go func(c net.Conn, n int) {
+				defer c.Close()
+				if n == 1 {
+					// Simulate transient 421 on first connection to exercise retry.
+					_, _ = io.WriteString(c, "421 Service temporarily unavailable\r\n")
+					return
+				}
+				_, _ = io.WriteString(c, "220 mock.smtp ESMTP\r\n")
+				sc := bufio.NewScanner(c)
+				inData := false
+				var data strings.Builder
+				for sc.Scan() {
+					line := sc.Text()
+					if inData {
+						if line == "." {
+							inData = false
+							mu.Lock()
+							messages = append(messages, data.String())
+							mu.Unlock()
+							_, _ = io.WriteString(c, "250 OK queued\r\n")
+							continue
+						}
+						data.WriteString(line + "\n")
+						continue
+					}
+					upper := strings.ToUpper(line)
+					switch {
+					case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+						_, _ = io.WriteString(c, "250-mock.smtp\r\n250 SIZE 1024000\r\n")
+					case strings.HasPrefix(upper, "MAIL FROM:"):
+						_, _ = io.WriteString(c, "250 OK\r\n")
+					case strings.HasPrefix(upper, "RCPT TO:"):
+						_, _ = io.WriteString(c, "250 OK\r\n")
+					case upper == "DATA":
+						inData = true
+						_, _ = io.WriteString(c, "354 End data with <CR><LF>.<CR><LF>\r\n")
+					case upper == "QUIT":
+						_, _ = io.WriteString(c, "221 Bye\r\n")
+						return
+					default:
+						_, _ = io.WriteString(c, "250 OK\r\n")
+					}
+				}
+			}(conn, attempt)
+		}
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+
+	ch := NewEmailChannel(EmailConfig{
+		Host:     host,
+		Port:     port,
+		From:     "alerts@uptimex.test",
+		To:       "oncall@uptimex.test",
+		Timeout:  2 * time.Second,
+		Attempts: 2,
+		Backoff:  5 * time.Millisecond,
+	})
+	status := 503
+	err = ch.Send(context.Background(), models.Alert{
+		Type:         models.AlertDown,
+		EndpointID:   42,
+		EndpointName: "Checkout",
+		URL:          "https://checkout.example.com/health",
+		DashboardURL: "https://status.example.com/app/endpoints/42",
+		FailureCount: 3,
+		LastStatus:   &status,
+		Message:      "Endpoint Checkout is DOWN",
+	})
+	if err != nil {
+		t.Fatalf("email Send failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if connections != 2 {
+		t.Fatalf("connections = %d, want 2 (1 retry)", connections)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(messages))
+	}
+	if !strings.Contains(messages[0], "Subject: [uptimex] DOWN Checkout") ||
+		!strings.Contains(messages[0], "Dashboard: https://status.example.com/app/endpoints/42") {
+		t.Fatalf("unexpected email payload:\n%s", messages[0])
 	}
 }

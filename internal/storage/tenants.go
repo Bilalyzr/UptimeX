@@ -37,10 +37,55 @@ func (s *SQLStore) CreateOrganization(ctx context.Context, o *models.Organizatio
 		INSERT INTO organizations (name, slug, plan, status_page_enabled, created_at, updated_at)
 		VALUES (?,?,?,?,?,?) RETURNING id`),
 		o.Name, o.Slug, o.Plan, o.StatusPageEnabled, now, now).Scan(&o.ID)
+	if s.isUniqueViolation(err) {
+		return ErrDuplicateSlug
+	}
 	if err != nil {
 		return err
 	}
 	o.CreatedAt, o.UpdatedAt = now, now
+	return nil
+}
+
+// CreateOrganizationWithOwner atomically inserts a new organization and its
+// owner user inside one transaction so a failed user insert (e.g. duplicate
+// email) never leaves an orphaned organization behind.
+func (s *SQLStore) CreateOrganizationWithOwner(ctx context.Context, o *models.Organization, u *models.User) error {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	err = tx.QueryRowContext(ctx, s.q(`
+		INSERT INTO organizations (name, slug, plan, status_page_enabled, created_at, updated_at)
+		VALUES (?,?,?,?,?,?) RETURNING id`),
+		o.Name, o.Slug, o.Plan, o.StatusPageEnabled, now, now).Scan(&o.ID)
+	if s.isUniqueViolation(err) {
+		return ErrDuplicateSlug
+	}
+	if err != nil {
+		return err
+	}
+
+	u.OrgID = o.ID
+	err = tx.QueryRowContext(ctx, s.q(`
+		INSERT INTO users (org_id, email, password_hash, name, role, created_at)
+		VALUES (?,?,?,?,?,?) RETURNING id`),
+		u.OrgID, u.Email, u.PasswordHash, u.Name, u.Role, now).Scan(&u.ID)
+	if s.isUniqueViolation(err) {
+		return ErrDuplicateEmail
+	}
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	o.CreatedAt, o.UpdatedAt = now, now
+	u.CreatedAt = now
 	return nil
 }
 
@@ -62,11 +107,14 @@ func (s *SQLStore) GetOrganizationBySlug(ctx context.Context, slug string) (*mod
 	return o, err
 }
 
-// UpdateOrganization persists mutable tenant settings (name, status page).
+// UpdateOrganization persists mutable tenant settings (name, slug, status page).
 func (s *SQLStore) UpdateOrganization(ctx context.Context, o *models.Organization) error {
 	res, err := s.db.ExecContext(ctx, s.q(`
 		UPDATE organizations SET name=?, slug=?, plan=?, status_page_enabled=?, updated_at=? WHERE id=?`),
 		o.Name, o.Slug, o.Plan, o.StatusPageEnabled, time.Now().UTC(), o.ID)
+	if s.isUniqueViolation(err) {
+		return ErrDuplicateSlug
+	}
 	if err != nil {
 		return err
 	}
@@ -210,12 +258,28 @@ func (s *SQLStore) UpdateUserPassword(ctx context.Context, userID int64, passwor
 	return nil
 }
 
-// ListSessionsForUser returns the account's sessions oldest-first. The
-// token hash is used to mark the current session and is never serialized.
+// UpdateUserName updates the display name of an account.
+func (s *SQLStore) UpdateUserName(ctx context.Context, userID int64, name string) error {
+	res, err := s.db.ExecContext(ctx, s.q(`UPDATE users SET name=? WHERE id=?`), name, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListSessionsForUser returns the account's active (unexpired) sessions oldest-first.
+// The token hash is used to mark the current session and is never serialized.
 func (s *SQLStore) ListSessionsForUser(ctx context.Context, userID int64) ([]models.Session, error) {
 	rows, err := s.db.QueryContext(ctx, s.q(`
 		SELECT token_hash, user_id, org_id, created_at, expires_at
-		FROM sessions WHERE user_id = ? ORDER BY created_at`), userID)
+		FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at`), userID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

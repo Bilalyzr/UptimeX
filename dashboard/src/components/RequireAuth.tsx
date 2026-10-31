@@ -3,6 +3,7 @@
 // else is redirected to /login.
 import { useEffect, useState, type ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
+import { apiKeyHeader } from '../api/client';
 import { useAuth } from '../auth';
 
 export function RequireAuth({ children }: { children: ReactNode }) {
@@ -14,8 +15,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     if (!ready || me) return;
     let cancelled = false;
     // Raw fetch (not the api client) so the global 401 interceptor does not
-    // fire during the probe itself.
-    fetch('/api/v1/endpoints')
+    // fire during the probe itself; include any stored X-API-Key header.
+    fetch('/api/v1/endpoints', { headers: apiKeyHeader() })
       .then((r) => {
         if (!cancelled) setAllowAnonymous(r.status !== 401);
       })

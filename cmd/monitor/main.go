@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -58,38 +59,53 @@ func run() error {
 	logger.Info("storage_ready", "driver", cfg.DB.Driver)
 
 	// Alerting channels.
+	guard := checker.NewGuard(cfg.Security.AllowPrivateTargets)
+	smtpCfg := alert.EmailConfig{
+		Host:     cfg.Alerts.SMTPHost,
+		Port:     cfg.Alerts.SMTPPort,
+		Username: cfg.Alerts.SMTPUsername,
+		Password: cfg.Alerts.SMTPPassword,
+		From:     cfg.Alerts.SMTPFrom,
+		To:       cfg.Alerts.SMTPTo,
+		Timeout:  cfg.Alerts.SMTPTimeout,
+		Attempts: cfg.Alerts.RetryAttempts,
+		Backoff:  cfg.Alerts.RetryBackoff,
+	}
 	var channels []alert.Channel
 	if cfg.Alerts.WebhookURL != "" {
 		channels = append(channels, alert.NewWebhookChannel(alert.WebhookConfig{
-			URL:      cfg.Alerts.WebhookURL,
-			Secret:   cfg.Alerts.WebhookSecret,
-			Timeout:  cfg.Alerts.WebhookTimeout,
-			Attempts: cfg.Alerts.RetryAttempts,
-			Backoff:  cfg.Alerts.RetryBackoff,
+			URL:       cfg.Alerts.WebhookURL,
+			Secret:    cfg.Alerts.WebhookSecret,
+			Timeout:   cfg.Alerts.WebhookTimeout,
+			Attempts:  cfg.Alerts.RetryAttempts,
+			Backoff:   cfg.Alerts.RetryBackoff,
+			Transport: guard.SafeTransport(),
 		}))
 	}
-	if cfg.Alerts.SMTPHost != "" {
-		channels = append(channels, alert.NewEmailChannel(alert.EmailConfig{
-			Host:     cfg.Alerts.SMTPHost,
-			Port:     cfg.Alerts.SMTPPort,
-			Username: cfg.Alerts.SMTPUsername,
-			Password: cfg.Alerts.SMTPPassword,
-			From:     cfg.Alerts.SMTPFrom,
-			To:       cfg.Alerts.SMTPTo,
-		}))
+	if cfg.Alerts.SMTPHost != "" && cfg.Alerts.SMTPTo != "" {
+		channels = append(channels, alert.NewEmailChannel(smtpCfg))
 	}
 	alerts := alert.NewManager(channels, cfg.Alerts.Cooldown, logger)
-	if len(channels) == 0 {
-		logger.Info("alerting_disabled", "reason", "no channels configured")
+	if len(channels) == 0 && !cfg.API.SAASMode {
+		logger.Info("alerting_disabled", "reason", "no global channels configured")
 	}
 
 	// Monitoring engine.
-	engine := monitor.New(store, checker.NewHTTPChecker(checker.NewGuard(cfg.Security.AllowPrivateTargets)),
+	engine := monitor.New(store, checker.NewHTTPChecker(guard),
 		alerts, monitor.Config{
-			WorkerCount:   cfg.WorkerCount,
-			JobQueueSize:  cfg.JobQueueSize,
-			SchedulerTick: cfg.SchedulerTick,
-			HighLatencyMs: cfg.Alerts.HighLatencyMs,
+			WorkerCount:        cfg.WorkerCount,
+			JobQueueSize:       cfg.JobQueueSize,
+			SchedulerTick:      cfg.SchedulerTick,
+			HighLatencyMs:      cfg.Alerts.HighLatencyMs,
+			RetentionDays:      cfg.RetentionDays,
+			RetentionInterval:  cfg.RetentionInterval,
+			SAASMode:           cfg.API.SAASMode,
+			PublicURL:          cfg.PublicURL,
+			Guard:              guard,
+			WebhookTimeout:     cfg.Alerts.WebhookTimeout,
+			AlertRetryAttempts: cfg.Alerts.RetryAttempts,
+			AlertRetryBackoff:  cfg.Alerts.RetryBackoff,
+			SMTP:               smtpCfg,
 		}, logger)
 
 	if cfg.SeedDemo {
@@ -122,7 +138,7 @@ func run() error {
 		Endpoints: &handlers.EndpointHandler{
 			Repo:    store,
 			Engine:  engine,
-			Guard:   checker.NewGuard(cfg.Security.AllowPrivateTargets),
+			Guard:   guard,
 			Metrics: metricsSvc,
 			Logger:  logger,
 		},
@@ -138,9 +154,20 @@ func run() error {
 			Logger:        logger,
 			SessionTTL:    cfg.API.SessionTTL,
 			SecureCookies: cfg.API.SecureCookies,
+			SMTP:          smtpCfg,
+			PublicURL:     cfg.PublicURL,
 		},
 		Org:    &handlers.OrgHandler{Repo: store, Logger: logger},
 		Public: &handlers.PublicHandler{Repo: store, Logger: logger},
+		AlertChannels: &handlers.AlertChannelHandler{
+			Repo:        store,
+			Engine:      engine,
+			Guard:       guard,
+			Logger:      logger,
+			SMTPEnabled: cfg.Alerts.SMTPHost != "",
+			PublicURL:   cfg.PublicURL,
+		},
+		APIKeys: &handlers.APIKeyHandler{Repo: store, Logger: logger},
 	})
 
 	srv := &http.Server{
@@ -196,10 +223,7 @@ func seedDemoEndpoints(logger *slog.Logger, store storage.Repository, cfg *confi
 	if count > 0 {
 		return
 	}
-	selfURL := os.Getenv("SEED_SELF_URL")
-	if selfURL == "" {
-		selfURL = "http://localhost:8080/health"
-	}
+	selfURL := defaultSelfURL(cfg.HTTPAddr)
 	demo := []models.Endpoint{
 		{Name: "Monitor Self (heartbeat)", URL: selfURL, Method: "GET", IntervalSeconds: 15,
 			TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true},
@@ -236,12 +260,7 @@ func seedDemoOrg(logger *slog.Logger, store storage.Repository, cfg *config.Conf
 		return
 	}
 
-	selfURL := os.Getenv("SEED_SELF_URL")
-	if selfURL == "" {
-		// Derive from the actual bind address so the heartbeat targets THIS
-		// monitor instead of a hardcoded port.
-		selfURL = "http://localhost" + cfg.HTTPAddr + "/health"
-	}
+	selfURL := defaultSelfURL(cfg.HTTPAddr)
 	demo := []models.Endpoint{
 		{Name: "Monitor Self (heartbeat)", URL: selfURL, Method: "GET", IntervalSeconds: 60,
 			TimeoutMs: 5000, FailureThreshold: 3, ExpectedStatusMin: 200, ExpectedStatusMax: 299, Enabled: true},
@@ -256,4 +275,15 @@ func seedDemoOrg(logger *slog.Logger, store storage.Repository, cfg *config.Conf
 		}
 	}
 	logger.Info("seeded_demo_org", "org_id", org.ID, "slug", org.Slug, "endpoints", len(demo))
+}
+
+func defaultSelfURL(httpAddr string) string {
+	if s := os.Getenv("SEED_SELF_URL"); s != "" {
+		return s
+	}
+	_, port, err := net.SplitHostPort(httpAddr)
+	if err != nil || port == "" {
+		port = "8080"
+	}
+	return "http://localhost:" + port + "/health"
 }

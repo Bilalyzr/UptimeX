@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"uptimex/api/middleware"
+	"uptimex/internal/alert"
 	"uptimex/internal/models"
 	"uptimex/internal/plans"
 	"uptimex/internal/storage"
@@ -31,6 +32,7 @@ const (
 	pbkdf2Iterations = 600_000
 	pbkdf2KeyLen     = 32
 	pbkdf2SaltLen    = 16
+	resetTokenTTL    = 30 * time.Minute
 )
 
 // AuthHandler serves the /api/v1/auth/* surface.
@@ -39,6 +41,11 @@ type AuthHandler struct {
 	Logger        *slog.Logger
 	SessionTTL    time.Duration
 	SecureCookies bool
+	SMTP          alert.EmailConfig
+	PublicURL     string
+	// OnResetToken is an optional test hook invoked when a password reset
+	// token is minted; production leaves this nil and delivers via SMTP only.
+	OnResetToken func(email, token string)
 }
 
 type signupPayload struct {
@@ -220,19 +227,13 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		Name: p.OrgName, Slug: h.uniqueSlug(r, slugify(p.OrgName)),
 		Plan: plans.Default().ID, StatusPageEnabled: true,
 	}
-	if err := h.Repo.CreateOrganization(r.Context(), org); err != nil {
-		h.Logger.Error("create_organization", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-
-	user := &models.User{OrgID: org.ID, Email: p.Email, PasswordHash: hash, Name: p.Name, Role: models.RoleOwner}
-	if err := h.Repo.CreateUser(r.Context(), user); err != nil {
+	user := &models.User{Email: p.Email, PasswordHash: hash, Name: p.Name, Role: models.RoleOwner}
+	if err := h.Repo.CreateOrganizationWithOwner(r.Context(), org, user); err != nil {
 		if errors.Is(err, storage.ErrDuplicateEmail) {
 			writeError(w, http.StatusConflict, "an account with this email already exists")
 			return
 		}
-		h.Logger.Error("create_user", "error", err)
+		h.Logger.Error("create_organization_with_owner", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -437,8 +438,151 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 			"endpoints":            used,
 			"max_endpoints":        plan.MaxEndpoints,
 			"min_interval_seconds": plan.MinIntervalSeconds,
+			"history_days":         plan.HistoryDays,
 		},
 	})
+}
+
+type profilePatchPayload struct {
+	Name string `json:"name"`
+}
+
+// UpdateProfile updates the signed-in user's display name.
+func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	id := middleware.IdentityFromContext(r.Context())
+	if id == nil || !id.Session {
+		writeError(w, http.StatusUnauthorized, "sign in required")
+		return
+	}
+	var p profilePatchPayload
+	if !decodeJSON(w, r, &p) {
+		return
+	}
+	name := strings.TrimSpace(p.Name)
+	if len(name) > 100 {
+		writeError(w, http.StatusBadRequest, "name must be at most 100 characters")
+		return
+	}
+	if err := h.Repo.UpdateUserName(r.Context(), id.UserID, name); err != nil {
+		logInternalError(w, h.Logger, "profile update", err)
+		return
+	}
+	user, err := h.Repo.GetUserByID(r.Context(), id.UserID)
+	if err != nil {
+		logInternalError(w, h.Logger, "profile get user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+type forgotPasswordPayload struct {
+	Email string `json:"email"`
+}
+
+type resetPasswordPayload struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+// ForgotPassword issues a short-lived password reset token without revealing
+// whether the email address is registered.
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var p forgotPasswordPayload
+	if !decodeJSON(w, r, &p) {
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(p.Email))
+	if email == "" || !strings.Contains(email, "@") || len(email) > 255 {
+		writeError(w, http.StatusBadRequest, "a valid email is required")
+		return
+	}
+	_ = h.Repo.DeleteExpiredPasswordResetTokens(r.Context())
+
+	user, err := h.Repo.GetUserByEmail(r.Context(), email)
+	if err == nil {
+		rawToken, tokenHash, tokErr := newSessionToken()
+		if tokErr != nil {
+			logInternalError(w, h.Logger, "forgot password: mint token", tokErr)
+			return
+		}
+		now := time.Now().UTC()
+		rec := &models.PasswordResetToken{
+			TokenHash: tokenHash,
+			UserID:    user.ID,
+			CreatedAt: now,
+			ExpiresAt: now.Add(resetTokenTTL),
+		}
+		if err := h.Repo.CreatePasswordResetToken(r.Context(), rec); err != nil {
+			logInternalError(w, h.Logger, "forgot password: store token", err)
+			return
+		}
+		if h.OnResetToken != nil {
+			h.OnResetToken(user.Email, rawToken)
+		}
+		resetLink := "/reset-password?token=" + rawToken
+		if h.PublicURL != "" {
+			resetLink = strings.TrimRight(h.PublicURL, "/") + resetLink
+		}
+		if h.SMTP.Host != "" {
+			body := fmt.Sprintf(
+				"A password reset was requested for your UptimeX account.\r\n\r\n"+
+					"Reset your password (valid for %d minutes):\r\n%s\r\n\r\n"+
+					"If you did not request this, you can safely ignore this email.\r\n",
+				int(resetTokenTTL.Minutes()), resetLink,
+			)
+			if mailErr := alert.SendRawEmail(r.Context(), h.SMTP, user.Email, "[uptimex] Password reset instructions", body); mailErr != nil {
+				h.Logger.Warn("password_reset_email_failed", "user_id", user.ID, "error", mailErr)
+			}
+		} else {
+			h.Logger.Warn("password_reset_requested_no_smtp", "user_id", user.ID)
+		}
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		logInternalError(w, h.Logger, "forgot password: lookup user", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"message": "If an account exists for that email, password reset instructions have been sent.",
+	})
+}
+
+// ResetPassword exchanges a valid password reset token for a new password and
+// revokes all active login sessions for that user.
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var p resetPasswordPayload
+	if !decodeJSON(w, r, &p) {
+		return
+	}
+	token := strings.TrimSpace(p.Token)
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "reset token is required")
+		return
+	}
+	if len(p.NewPassword) < 8 || len(p.NewPassword) > 200 {
+		writeError(w, http.StatusBadRequest, "new password must be between 8 and 200 characters")
+		return
+	}
+	passHash, err := hashPassword(p.NewPassword)
+	if err != nil {
+		logInternalError(w, h.Logger, "reset password: hash", err)
+		return
+	}
+	sum := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(sum[:])
+
+	userID, err := h.Repo.ConsumePasswordResetToken(r.Context(), tokenHash, passHash)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "invalid or expired reset token")
+		return
+	}
+	if err != nil {
+		logInternalError(w, h.Logger, "reset password: consume", err)
+		return
+	}
+	h.clearSessionCookie(w)
+	h.Logger.Info("password_reset_completed", "user_id", userID)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // decodeJSON is the auth-body variant of the endpoint payload decoder.

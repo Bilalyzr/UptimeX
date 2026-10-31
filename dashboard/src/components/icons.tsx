@@ -96,3 +96,23 @@ export function IconBuilding({ size = 16 }: IconProps) {
     </svg>
   );
 }
+
+export function IconBell({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <path d="M6 10a6 6 0 0 1 12 0c0 4 1.8 5.8 1.8 5.8H4.2S6 14 6 10z" />
+      <path d="M10.3 19a2 2 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
+export function IconKey({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <circle cx="8" cy="15" r="4" />
+      <path d="M11 12l8-8" />
+      <path d="M16 7l2.5 2.5" />
+      <path d="M18.5 4.5L21 7" />
+    </svg>
+  );
+}

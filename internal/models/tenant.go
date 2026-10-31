@@ -51,3 +51,43 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+// Alert channel types.
+const (
+	AlertChannelWebhook = "webhook"
+	AlertChannelEmail   = "email"
+)
+
+// AlertChannel is a tenant-configured notification destination (webhook or email).
+type AlertChannel struct {
+	ID        int64     `json:"id"`
+	OrgID     int64     `json:"org_id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Target    string    `json:"target"`
+	Secret    string    `json:"-"`
+	HasSecret bool      `json:"has_secret"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// APIKey is a tenant-scoped programmatic token. Only the SHA-256 hash and a
+// short prefix are persisted; the full token is returned once at creation.
+type APIKey struct {
+	ID         int64      `json:"id"`
+	OrgID      int64      `json:"org_id"`
+	Name       string     `json:"name"`
+	KeyPrefix  string     `json:"key_prefix"`
+	TokenHash  string     `json:"-"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// PasswordResetToken is a single-use, short-lived password reset token.
+type PasswordResetToken struct {
+	TokenHash string    `json:"-"`
+	UserID    int64     `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}

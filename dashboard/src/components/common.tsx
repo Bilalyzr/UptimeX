@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useAuth } from '../auth';
 
 export function StatCard(props: { label: string; value: ReactNode; hint?: string; color?: string }) {
   return (
@@ -37,6 +38,8 @@ export function ErrorBanner({ message }: { message: string }) {
 }
 
 export function WindowPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { me } = useAuth();
+  const maxDays = me?.usage.history_days ?? 90;
   return (
     <label className="row" style={{ gap: 6 }}>
       <span className="muted" style={{ fontSize: 12 }}>
@@ -47,6 +50,12 @@ export function WindowPicker({ value, onChange }: { value: string; onChange: (v:
         <option value="6h">6 hours</option>
         <option value="24h">24 hours</option>
         <option value="7d">7 days</option>
+        <option value="30d" disabled={maxDays < 30}>
+          30 days{maxDays < 30 ? ' (Pro+)' : ''}
+        </option>
+        <option value="90d" disabled={maxDays < 90}>
+          90 days{maxDays < 90 ? ' (Business)' : ''}
+        </option>
       </select>
     </label>
   );

@@ -394,4 +394,64 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
+func TestRateLimitHealthExemptionAndProxyClientIP(t *testing.T) {
+	store, err := storage.Open(context.Background(), storage.Options{Driver: "sqlite", SQLitePath: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	cfg := &config.APIConfig{RateLimitRPS: 1, RateLimitBurst: 2, TrustProxyHeaders: true}
+	handler := routes.New(routes.Deps{
+		Logger:    logging.NewForTest(),
+		APIConfig: cfg,
+		Health:    handlers.NewHealthHandler(time.Now().UTC(), "t", func() error { return nil }),
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	doWithXFF := func(path, xff string) int {
+		req, err := http.NewRequest("GET", srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// Exhaust client A's bucket (203.0.113.10).
+	_ = doWithXFF("/api/v1/endpoints", "203.0.113.10")
+	_ = doWithXFF("/api/v1/endpoints", "203.0.113.10")
+	if got := doWithXFF("/api/v1/endpoints", "203.0.113.10"); got != http.StatusTooManyRequests {
+		t.Fatalf("client A 3rd request = %d, want 429", got)
+	}
+
+	// Spoofing a fake left-most X-Forwarded-For entry must still hit client A's bucket.
+	if got := doWithXFF("/api/v1/endpoints", "198.51.100.99, 203.0.113.10"); got != http.StatusTooManyRequests {
+		t.Fatalf("spoofed XFF prefix = %d, want 429 on rightmost client IP", got)
+	}
+
+	// Client B behind the same reverse proxy has an independent bucket.
+	if got := doWithXFF("/api/v1/endpoints", "198.51.100.22"); got == http.StatusTooManyRequests {
+		t.Fatalf("independent client B behind proxy was throttled (%d)", got)
+	}
+
+	// Liveness and readiness probes must NEVER be throttled even when client A's bucket is empty.
+	for i := 0; i < 8; i++ {
+		if got := doWithXFF("/health", "203.0.113.10"); got != http.StatusOK {
+			t.Fatalf("/health under rate limit = %d, want 200", got)
+		}
+		if got := doWithXFF("/ready", "203.0.113.10"); got != http.StatusOK {
+			t.Fatalf("/ready under rate limit = %d, want 200", got)
+		}
+	}
+}
+
 var _ = models.StateHealthy // keep models import if assertions shrink

@@ -31,15 +31,18 @@ type EndpointHandler struct {
 
 // endpointPayload is the create/update request body.
 type endpointPayload struct {
-	Name              *string `json:"name"`
-	URL               *string `json:"url"`
-	Method            *string `json:"method"`
-	IntervalSeconds   *int    `json:"interval_seconds"`
-	TimeoutMs         *int    `json:"timeout_ms"`
-	FailureThreshold  *int    `json:"failure_threshold"`
-	ExpectedStatusMin *int    `json:"expected_status_min"`
-	ExpectedStatusMax *int    `json:"expected_status_max"`
-	Enabled           *bool   `json:"enabled"`
+	Name                 *string            `json:"name"`
+	URL                  *string            `json:"url"`
+	Method               *string            `json:"method"`
+	Headers              *map[string]string `json:"headers"`
+	Body                 *string            `json:"body"`
+	ExpectedBodyContains *string            `json:"expected_body_contains"`
+	IntervalSeconds      *int               `json:"interval_seconds"`
+	TimeoutMs            *int               `json:"timeout_ms"`
+	FailureThreshold     *int               `json:"failure_threshold"`
+	ExpectedStatusMin    *int               `json:"expected_status_min"`
+	ExpectedStatusMax    *int               `json:"expected_status_max"`
+	Enabled              *bool              `json:"enabled"`
 }
 
 var allowedMethods = map[string]bool{"GET": true, "HEAD": true, "POST": true}
@@ -63,6 +66,21 @@ func validateEndpoint(e *models.Endpoint, guard *checker.Guard) error {
 	}
 	if !allowedMethods[e.Method] {
 		errs = append(errs, "method must be GET, HEAD or POST")
+	}
+	if len(e.Headers) > 32 {
+		errs = append(errs, "headers may contain at most 32 entries")
+	}
+	for k, v := range e.Headers {
+		if len(k) > 128 || len(v) > 2048 || strings.ContainsAny(k+v, "\r\n") {
+			errs = append(errs, "invalid custom header name or value")
+			break
+		}
+	}
+	if len(e.Body) > 65536 {
+		errs = append(errs, "body must be at most 65536 bytes")
+	}
+	if len(e.ExpectedBodyContains) > 1024 {
+		errs = append(errs, "expected_body_contains must be at most 1024 characters")
 	}
 	if e.IntervalSeconds < 5 || e.IntervalSeconds > 86400 {
 		errs = append(errs, "interval_seconds must be between 5 and 86400")
@@ -128,6 +146,24 @@ func enforcePlanInterval(w http.ResponseWriter, id *middleware.Identity, interva
 	return true
 }
 
+// enforcePlanHistory rejects metrics/history windows longer than the tenant's plan allows.
+func enforcePlanHistory(w http.ResponseWriter, id *middleware.Identity, span time.Duration) bool {
+	if id == nil || !id.IsTenant() {
+		return true
+	}
+	plan, ok := plans.ByID(id.Plan)
+	if !ok || plan.HistoryDays <= 0 {
+		return true
+	}
+	maxSpan := time.Duration(plan.HistoryDays)*24*time.Hour + time.Minute
+	if span > maxSpan {
+		writeError(w, http.StatusForbidden, "history window exceeds the "+plan.Name+
+			" plan limit of "+strconv.Itoa(plan.HistoryDays)+" days. Upgrade your plan for longer retention.")
+		return false
+	}
+	return true
+}
+
 // List returns endpoint configuration + live state + windowed metrics.
 func (h *EndpointHandler) List(w http.ResponseWriter, r *http.Request) {
 	window, ok := h.windowParam(w, r)
@@ -135,9 +171,12 @@ func (h *EndpointHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := middleware.IdentityFromContext(r.Context())
+	if !enforcePlanHistory(w, id, window) {
+		return
+	}
 	var rows []metrics.EndpointSummary
 	var err error
-	if id != nil && id.Session {
+	if id.IsTenant() {
 		rows, err = h.Metrics.EndpointSummariesInOrg(r.Context(), id.OrgID, window)
 	} else {
 		rows, err = h.Metrics.EndpointSummaries(r.Context(), window)
@@ -164,6 +203,15 @@ func (h *EndpointHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.Method != nil {
 		e.Method = *p.Method
+	}
+	if p.Headers != nil {
+		e.Headers = *p.Headers
+	}
+	if p.Body != nil {
+		e.Body = *p.Body
+	}
+	if p.ExpectedBodyContains != nil {
+		e.ExpectedBodyContains = *p.ExpectedBodyContains
 	}
 	if p.IntervalSeconds != nil {
 		e.IntervalSeconds = *p.IntervalSeconds
@@ -207,7 +255,7 @@ func (h *EndpointHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !enforcePlanInterval(w, id, e.IntervalSeconds) {
 		return
 	}
-	if id != nil && id.Session {
+	if id.IsTenant() {
 		orgID := id.OrgID
 		e.OrgID = &orgID
 	}
@@ -281,6 +329,15 @@ func (h *EndpointHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if p.Method != nil {
 		existing.Method = *p.Method
 	}
+	if p.Headers != nil {
+		existing.Headers = *p.Headers
+	}
+	if p.Body != nil {
+		existing.Body = *p.Body
+	}
+	if p.ExpectedBodyContains != nil {
+		existing.ExpectedBodyContains = *p.ExpectedBodyContains
+	}
 	if p.IntervalSeconds != nil {
 		existing.IntervalSeconds = *p.IntervalSeconds
 	}
@@ -352,16 +409,22 @@ func (h *EndpointHandler) Checks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "limit must be between 1 and 1000")
 		return
 	}
-	since := time.Now().UTC().Add(-24 * time.Hour)
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
 	if s := r.URL.Query().Get("since"); s != "" {
-		if d, err := time.ParseDuration(s); err == nil {
-			since = time.Now().UTC().Add(-d)
+		if d, err := metrics.ParseWindow(s, 24*time.Hour); err == nil {
+			since = now.Add(-d)
+		} else if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			since = now.Add(-d)
 		} else if t, err := time.Parse(time.RFC3339, s); err == nil {
 			since = t.UTC()
 		} else {
-			writeError(w, http.StatusBadRequest, "since must be a duration (e.g. 6h) or RFC3339 timestamp")
+			writeError(w, http.StatusBadRequest, "since must be a window/duration (e.g. 6h, 7d) or RFC3339 timestamp")
 			return
 		}
+	}
+	if !enforcePlanHistory(w, middleware.IdentityFromContext(r.Context()), now.Sub(since)) {
+		return
 	}
 	checks, err := h.Repo.ListChecks(r.Context(), id, since, limit)
 	if err != nil {
@@ -371,7 +434,7 @@ func (h *EndpointHandler) Checks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"checks": checks, "count": len(checks)})
 }
 
-// EndpointMetrics returns per-endpoint analytics (?window=1h|24h|7d).
+// EndpointMetrics returns per-endpoint analytics (?window=1h|24h|7d|30d|90d).
 func (h *EndpointHandler) EndpointMetrics(w http.ResponseWriter, r *http.Request) {
 	e, ok := h.getOwnedEndpoint(w, r)
 	if !ok {
@@ -380,6 +443,9 @@ func (h *EndpointHandler) EndpointMetrics(w http.ResponseWriter, r *http.Request
 	id := e.ID
 	window, ok := h.windowParam(w, r)
 	if !ok {
+		return
+	}
+	if !enforcePlanHistory(w, middleware.IdentityFromContext(r.Context()), window) {
 		return
 	}
 	m, err := h.Metrics.EndpointMetricsFor(r.Context(), id, window)

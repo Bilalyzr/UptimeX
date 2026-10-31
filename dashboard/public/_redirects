@@ -1,0 +1,8 @@
+# Cloudflare Pages SPA history fallback (Vite copies this file into dist/ on build).
+#
+# API routes (/api/*, /health, /ready) are reverse-proxied to MONITOR_ORIGIN by
+# Cloudflare Pages Functions in dashboard/functions/ (scoped via _routes.json),
+# because Cloudflare Pages _redirects does not support 200 proxy rewrites to
+# external origins.
+
+/*  /index.html  200

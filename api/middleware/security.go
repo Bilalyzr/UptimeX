@@ -20,8 +20,8 @@ type CORS struct {
 func (m *CORS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if m.AllowedOrigin != "" {
 		w.Header().Set("Access-Control-Allow-Origin", m.AllowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key, Authorization")
 		w.Header().Set("Access-Control-Max-Age", "600")
 	}
 	if r.Method == http.MethodOptions {
@@ -84,13 +84,16 @@ func (b *tokenBucket) allow(now time.Time) bool {
 }
 
 // RateLimit throttles requests per client IP using a token bucket. Clients
-// exceeding the limit receive 429.
+// exceeding the limit receive 429. Liveness/readiness paths in ExemptPaths
+// bypass throttling so monitoring probes never trip false alarms.
 type RateLimit struct {
-	rps     float64
-	burst   float64
-	mu      sync.Mutex
-	buckets map[string]*tokenBucket
-	Next    http.Handler
+	rps         float64
+	burst       float64
+	TrustProxy  bool
+	ExemptPaths map[string]bool
+	mu          sync.Mutex
+	buckets     map[string]*tokenBucket
+	Next        http.Handler
 }
 
 // NewRateLimit builds the limiter; rps is sustained requests/second and burst
@@ -118,10 +121,11 @@ func (m *RateLimit) Wrap(next http.Handler) http.Handler {
 }
 
 func (m *RateLimit) check(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	client, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		client = r.RemoteAddr
+	if m.ExemptPaths != nil && m.ExemptPaths[r.URL.Path] {
+		next.ServeHTTP(w, r)
+		return
 	}
+	client := resolveClientIP(r, m.TrustProxy)
 	m.mu.Lock()
 	b, ok := m.buckets[client]
 	if !ok {
@@ -148,4 +152,38 @@ func (m *RateLimit) check(w http.ResponseWriter, r *http.Request, next http.Hand
 		return
 	}
 	next.ServeHTTP(w, r)
+}
+
+// resolveClientIP extracts the caller IP. Forwarding headers (CF-Connecting-IP,
+// X-Real-IP, X-Forwarded-For) are honored when trustProxy is explicitly enabled
+// OR when the immediate peer is a loopback/private reverse proxy (such as the
+// bundled Docker nginx container or a platform load balancer). For
+// X-Forwarded-For we inspect right-to-left so client-prepended fake IPs cannot
+// spoof the proxy-appended address.
+func resolveClientIP(r *http.Request, trustProxy bool) string {
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		peer = strings.TrimSpace(r.RemoteAddr)
+	}
+	peerIP := net.ParseIP(peer)
+	isTrustedPeer := trustProxy || (peerIP != nil && (peerIP.IsLoopback() || peerIP.IsPrivate() || peerIP.IsLinkLocalUnicast()))
+
+	if isTrustedPeer {
+		if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cf != "" && net.ParseIP(cf) != nil {
+			return cf
+		}
+		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" && net.ParseIP(xr) != nil {
+			return xr
+		}
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				cand := strings.TrimSpace(parts[i])
+				if net.ParseIP(cand) != nil {
+					return cand
+				}
+			}
+		}
+	}
+	return peer
 }

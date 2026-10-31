@@ -18,12 +18,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (resp.status === 204) {
     return undefined as T;
   }
+  const body = await resp.json().catch(() => ({}));
+  const errMsg = (body as { error?: string }).error;
   // Strict sessions: an expired/missing session inside the app means the
   // user must re-authenticate — bounce to /login instead of painting 401
-  // error banners everywhere. Auth and public endpoints are exempt (they
-  // legitimately run without a session).
+  // error banners everywhere. Auth/public endpoints and legacy operator
+  // API_KEY challenges ("missing or invalid API key") are exempt.
   if (
     resp.status === 401 &&
+    errMsg !== 'missing or invalid API key' &&
     window.location.pathname.startsWith('/app') &&
     !path.startsWith('/api/v1/auth/') &&
     !path.startsWith('/api/v1/public/')
@@ -31,15 +34,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     window.location.assign('/login');
     throw new ApiError(401, 'session expired');
   }
-  const body = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    throw new ApiError(resp.status, (body as { error?: string }).error ?? `HTTP ${resp.status}`);
+    throw new ApiError(resp.status, errMsg ?? `HTTP ${resp.status}`);
   }
   return body as T;
 }
 
-function apiKeyHeader(): Record<string, string> {
-  const key = localStorage.getItem('uptimex_api_key');
+const API_KEY_STORAGE_KEY = 'uptimex_api_key';
+
+export function getStoredApiKey(): string {
+  try {
+    return localStorage.getItem(API_KEY_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setStoredApiKey(key: string): void {
+  const trimmed = key.trim();
+  if (trimmed) {
+    localStorage.setItem(API_KEY_STORAGE_KEY, trimmed);
+  } else {
+    localStorage.removeItem(API_KEY_STORAGE_KEY);
+  }
+}
+
+export function apiKeyHeader(): Record<string, string> {
+  const key = getStoredApiKey();
   return key ? { 'X-API-Key': key } : {};
 }
 

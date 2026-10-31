@@ -1,12 +1,12 @@
-// User profile: account identity, password rotation, active sessions (with
-// revoke-others) and organization settings — the UI surface for the
-// account-security API (PUT /auth/password, GET/DELETE /auth/sessions).
+// User profile: account identity & display name editing, password rotation,
+// active sessions (with revoke-others), organization settings (name, slug,
+// status page toggle) and programmatic API keys (upx_...).
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../api/client';
 import { useAuth } from '../auth';
-import type { OrgResponse } from '../types';
-import { IconBuilding, IconLock, IconMonitor, IconUser } from '../components/icons';
+import type { APIKeyItem, OrgResponse } from '../types';
+import { IconBuilding, IconKey, IconLock, IconMonitor, IconUser } from '../components/icons';
 
 interface SessionRow {
   created_at: string;
@@ -40,11 +40,26 @@ export function Profile() {
   const { me, refresh } = useAuth();
   const [org, setOrg] = useState<OrgResponse | null>(null);
   const [sessions, setSessions] = useState<SessionRow[] | null>(null);
+  const [apiKeys, setApiKeys] = useState<APIKeyItem[] | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const [displayName, setDisplayName] = useState('');
+  const [orgName, setOrgName] = useState('');
+  const [orgSlug, setOrgSlug] = useState('');
+
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
-  const [busy, setBusy] = useState(false);
+
+  const [newKeyName, setNewKeyName] = useState('');
+  const [revealedToken, setRevealedToken] = useState('');
+
+  useEffect(() => {
+    if (me) {
+      setDisplayName(me.user.name ?? '');
+    }
+  }, [me]);
 
   const loadSessions = useCallback(() => {
     api
@@ -56,14 +71,60 @@ export function Profile() {
   const loadOrg = useCallback(() => {
     api
       .get<OrgResponse>('/api/v1/org')
-      .then(setOrg)
+      .then((res) => {
+        setOrg(res);
+        setOrgName(res.org.name);
+        setOrgSlug(res.org.slug);
+      })
       .catch(() => setOrg(null));
   }, []);
 
+  const loadApiKeys = useCallback(() => {
+    api
+      .get<{ api_keys: APIKeyItem[] }>('/api/v1/api-keys')
+      .then((res) => setApiKeys(res.api_keys))
+      .catch(() => setApiKeys([]));
+  }, []);
+
   useEffect(() => {
+    if (!me) return;
     loadSessions();
     loadOrg();
-  }, [loadSessions, loadOrg]);
+    loadApiKeys();
+  }, [me, loadSessions, loadOrg, loadApiKeys]);
+
+  const saveDisplayName = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setNotice('');
+    setError('');
+    try {
+      await api.patch('/api/v1/auth/me', { name: displayName });
+      await refresh();
+      setNotice('Profile updated.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Profile update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveOrgSettings = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setNotice('');
+    setError('');
+    try {
+      await api.patch('/api/v1/org', { name: orgName, slug: orgSlug });
+      loadOrg();
+      await refresh();
+      setNotice('Organization settings saved.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Organization update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const changePassword = async (e: FormEvent) => {
     e.preventDefault();
@@ -106,13 +167,52 @@ export function Profile() {
     if (!org) return;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await api.patch('/api/v1/org', {
         status_page_enabled: !org.org.status_page_enabled,
       });
       loadOrg();
+      await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createApiKey = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!newKeyName.trim()) return;
+    setBusy(true);
+    setNotice('');
+    setError('');
+    try {
+      const res = await api.post<{ api_key: APIKeyItem; token: string }>('/api/v1/api-keys', {
+        name: newKeyName.trim(),
+      });
+      setNewKeyName('');
+      setRevealedToken(res.token);
+      setNotice(`API key "${res.api_key.name}" created. Copy the secret token below — it won't be shown again.`);
+      loadApiKeys();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to create API key');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteApiKey = async (k: APIKeyItem) => {
+    if (!window.confirm(`Revoke API key "${k.name}" (${k.key_prefix}…)?`)) return;
+    setBusy(true);
+    setNotice('');
+    setError('');
+    try {
+      await api.del(`/api/v1/api-keys/${k.id}`);
+      setNotice(`Revoked API key "${k.name}".`);
+      loadApiKeys();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to revoke API key');
     } finally {
       setBusy(false);
     }
@@ -142,17 +242,16 @@ export function Profile() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Profile</h1>
-          <div className="subtitle">Account, security and organization settings</div>
+          <div className="subtitle">Account, security, API keys and organization settings</div>
         </div>
       </div>
 
-      {(notice || error) && (
-        <div className={notice ? 'notice-banner' : 'error-banner'}>{notice || error}</div>
-      )}
+      {notice && <div className="notice-banner">{notice}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       <div className="profile-grid">
         <Section icon={<IconUser size={16} />} title="Profile">
-          <div className="row" style={{ gap: 14, alignItems: 'flex-start' }}>
+          <div className="row" style={{ gap: 14, alignItems: 'flex-start', marginBottom: 14 }}>
             <div className="profile-avatar" aria-hidden="true">
               {initials || 'U'}
             </div>
@@ -169,6 +268,20 @@ export function Profile() {
               </div>
             </div>
           </div>
+          <form onSubmit={saveDisplayName} className="auth-form">
+            <label>
+              Display name
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your name"
+                maxLength={100}
+              />
+            </label>
+            <button className="btn btn-sm btn-primary" disabled={busy} type="submit">
+              Save name
+            </button>
+          </form>
         </Section>
 
         <Section icon={<IconLock size={16} />} title="Password">
@@ -241,13 +354,34 @@ export function Profile() {
         <Section icon={<IconBuilding size={16} />} title="Organization">
           {org ? (
             <div className="profile-facts">
-              <div className="profile-name" style={{ fontSize: 15 }}>
-                {org.org.name}
-              </div>
-              <div className="muted mono" style={{ fontSize: 12 }}>
-                /status/{org.org.slug}
-              </div>
-              <div className="row" style={{ marginTop: 12, justifyContent: 'space-between' }}>
+              <form onSubmit={saveOrgSettings} className="auth-form" style={{ marginBottom: 14 }}>
+                <label>
+                  Organization name
+                  <input
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    minLength={2}
+                    maxLength={100}
+                    required
+                  />
+                </label>
+                <label>
+                  Status page slug <span className="muted mono">(/status/{orgSlug || '…'})</span>
+                  <input
+                    value={orgSlug}
+                    onChange={(e) => setOrgSlug(e.target.value.toLowerCase())}
+                    pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                    minLength={2}
+                    maxLength={60}
+                    required
+                  />
+                </label>
+                <button className="btn btn-sm btn-primary" disabled={busy} type="submit">
+                  Save organization
+                </button>
+              </form>
+
+              <div className="row" style={{ marginTop: 8, justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>Public status page</div>
                   <div className="muted" style={{ fontSize: 12 }}>
@@ -274,6 +408,84 @@ export function Profile() {
             </div>
           ) : (
             <div className="loading skeleton" />
+          )}
+        </Section>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <Section icon={<IconKey size={16} />} title="Programmatic API keys">
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+            Authenticate scripts and CI pipelines with <code>X-API-Key: upx_…</code> or{' '}
+            <code>Authorization: Bearer upx_…</code>. Keys are scoped strictly to {me.org.name}.
+          </p>
+
+          {revealedToken && (
+            <div className="notice-banner" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span>Secret token (shown once):</span>
+              <code className="mono" style={{ fontWeight: 700, wordBreak: 'break-all' }}>
+                {revealedToken}
+              </code>
+              <span className="spacer" />
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(revealedToken);
+                }}
+              >
+                Copy
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setRevealedToken('')}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={createApiKey} className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            <input
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              placeholder="Key label (e.g. GitHub Actions, Terraform)"
+              style={{ flex: 1, minWidth: 220 }}
+              maxLength={100}
+              required
+            />
+            <button type="submit" className="btn btn-primary" disabled={busy}>
+              + Generate API key
+            </button>
+          </form>
+
+          {apiKeys === null ? (
+            <div className="loading skeleton" />
+          ) : apiKeys.length === 0 ? (
+            <div className="muted" style={{ fontSize: 13 }}>
+              No API keys created yet.
+            </div>
+          ) : (
+            <div className="session-list">
+              {apiKeys.map((k) => (
+                <div className="session-row" key={k.id}>
+                  <strong>{k.name}</strong>
+                  <code className="mono muted" style={{ fontSize: 12 }}>
+                    {k.key_prefix}…
+                  </code>
+                  <span className="muted mono" style={{ fontSize: 11 }}>
+                    {k.last_used_at
+                      ? `used ${new Date(k.last_used_at).toLocaleString()}`
+                      : `created ${new Date(k.created_at).toLocaleDateString()}`}
+                  </span>
+                  <span className="spacer" />
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger"
+                    disabled={busy}
+                    onClick={() => void deleteApiKey(k)}
+                  >
+                    Revoke
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </Section>
       </div>

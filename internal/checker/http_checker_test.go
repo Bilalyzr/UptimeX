@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -205,5 +206,43 @@ func TestCheckNeverPanicsOnGarbageURL(t *testing.T) {
 	res := c.Check(context.Background(), ep) // must not panic
 	if res.Success || res.ErrorType == "" {
 		t.Fatalf("garbage URL must produce structured failure: %+v", res)
+	}
+}
+
+func TestCheckCustomHeadersBodyAndExpectedBodyContains(t *testing.T) {
+	var (
+		gotHeader string
+		gotBody   string
+		gotMethod string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotHeader = r.Header.Get("X-Probe-Token")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","db":"ok"}`))
+	}))
+	defer srv.Close()
+
+	c := NewHTTPChecker(NewGuard(true))
+	ep := testEndpoint(srv.URL)
+	ep.Method = "POST"
+	ep.Headers = map[string]string{"X-Probe-Token": "secret-123"}
+	ep.Body = `{"ping":true}`
+	ep.ExpectedBodyContains = `"status":"healthy"`
+
+	res := c.Check(context.Background(), ep)
+	if !res.Success {
+		t.Fatalf("expected custom POST + keyword match to succeed: %+v", res)
+	}
+	if gotMethod != "POST" || gotHeader != "secret-123" || gotBody != `{"ping":true}` {
+		t.Fatalf("target saw method=%q header=%q body=%q", gotMethod, gotHeader, gotBody)
+	}
+
+	ep.ExpectedBodyContains = `"status":"degraded-missing"`
+	mismatch := c.Check(context.Background(), ep)
+	if mismatch.Success || mismatch.ErrorType != models.ErrTypeBodyMismatch {
+		t.Fatalf("expected body_mismatch failure, got %+v", mismatch)
 	}
 }

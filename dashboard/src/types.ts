@@ -7,6 +7,9 @@ export interface Endpoint {
   name: string;
   url: string;
   method: string;
+  headers?: Record<string, string>;
+  body?: string;
+  expected_body_contains?: string;
   interval_seconds: number;
   timeout_ms: number;
   failure_threshold: number;
@@ -43,6 +46,28 @@ export interface PlanUsage {
   endpoints: number;
   max_endpoints?: number;
   min_interval_seconds?: number;
+  history_days?: number;
+}
+
+export interface AlertChannel {
+  id: number;
+  org_id: number;
+  name: string;
+  type: 'webhook' | 'email';
+  target: string;
+  has_secret: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface APIKeyItem {
+  id: number;
+  org_id: number;
+  name: string;
+  key_prefix: string;
+  last_used_at: string | null;
+  created_at: string;
 }
 
 export interface Me {
@@ -210,6 +235,7 @@ export interface EngineStats {
   checks_attempted: number;
   checks_succeeded: number;
   checks_failed: number;
+  checks_pruned?: number;
   pool: { workers: number; active_workers: number; queue_depth: number; processed_total: number; in_flight: number };
   scheduler: { in_flight: number; duplicates_skipped: number };
 }

@@ -41,6 +41,7 @@ type AlertConfig struct {
 	SMTPPassword   string
 	SMTPFrom       string
 	SMTPTo         string
+	SMTPTimeout    time.Duration
 	Cooldown       time.Duration // per endpoint+type dedup window
 	HighLatencyMs  int64         // 0 disables HIGH_LATENCY alerts
 	RetryAttempts  int
@@ -52,6 +53,7 @@ type APIConfig struct {
 	APIKey            string        // when set, mutating routes require X-API-Key
 	RateLimitRPS      float64       // token bucket refill rate for admin APIs
 	RateLimitBurst    int           // token bucket capacity
+	TrustProxyHeaders bool          // trust X-Forwarded-For / X-Real-IP from any peer
 	CORSAllowedOrigin string        // dashboard origin permitted to call the API
 	ShutdownTimeout   time.Duration // graceful HTTP shutdown budget
 	// SAASMode enables the multi-tenant surface: signup/login sessions,
@@ -72,24 +74,28 @@ type SecurityConfig struct {
 
 // Config is the fully validated runtime configuration.
 type Config struct {
-	Env           string // development | production
-	HTTPAddr      string
-	DB            DBConfig
-	WorkerCount   int
-	SchedulerTick time.Duration
-	JobQueueSize  int
-	Alerts        AlertConfig
-	API           APIConfig
-	Security      SecurityConfig
-	SeedDemo      bool // register demo endpoints on first boot when DB is empty
-	MonitorName   string
+	Env               string // development | production
+	HTTPAddr          string
+	PublicURL         string // external dashboard base URL for alert/reset links
+	DB                DBConfig
+	WorkerCount       int
+	SchedulerTick     time.Duration
+	JobQueueSize      int
+	RetentionDays     int           // raw check retention horizon (PRD FR-14; 0 disables)
+	RetentionInterval time.Duration // background pruning cadence
+	Alerts            AlertConfig
+	API               APIConfig
+	Security          SecurityConfig
+	SeedDemo          bool // register demo endpoints on first boot when DB is empty
+	MonitorName       string
 }
 
 // Load reads the environment and returns a validated configuration.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:      strings.ToLower(envStr("APP_ENV", "development")),
-		HTTPAddr: envStr("HTTP_ADDR", ":8080"),
+		Env:       strings.ToLower(envStr("APP_ENV", "development")),
+		HTTPAddr:  envStr("HTTP_ADDR", ":8080"),
+		PublicURL: strings.TrimRight(envStr("PUBLIC_URL", ""), "/"),
 		DB: DBConfig{
 			Driver:          DBDriver(strings.ToLower(envStr("DB_DRIVER", string(DriverPostgres)))),
 			PostgresDSN:     envStr("POSTGRES_DSN", "postgres://monitor:monitor@localhost:5432/healthmonitor?sslmode=disable"),
@@ -98,9 +104,11 @@ func Load() (*Config, error) {
 			MaxIdleConns:    envInt("DB_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: envDur("DB_CONN_MAX_LIFETIME", 30*time.Minute),
 		},
-		WorkerCount:   envInt("WORKER_COUNT", 20),
-		SchedulerTick: envDur("SCHEDULER_TICK", 1*time.Second),
-		JobQueueSize:  envInt("JOB_QUEUE_SIZE", 512),
+		WorkerCount:       envInt("WORKER_COUNT", 20),
+		SchedulerTick:     envDur("SCHEDULER_TICK", 1*time.Second),
+		JobQueueSize:      envInt("JOB_QUEUE_SIZE", 512),
+		RetentionDays:     envInt("RETENTION_DAYS", 90),
+		RetentionInterval: envDur("RETENTION_INTERVAL", time.Hour),
 		Alerts: AlertConfig{
 			WebhookURL:     envStr("ALERT_WEBHOOK_URL", ""),
 			WebhookSecret:  envStr("ALERT_WEBHOOK_SECRET", ""),
@@ -111,6 +119,7 @@ func Load() (*Config, error) {
 			SMTPPassword:   envStr("SMTP_PASSWORD", ""),
 			SMTPFrom:       envStr("SMTP_FROM", ""),
 			SMTPTo:         envStr("SMTP_TO", ""),
+			SMTPTimeout:    envDur("SMTP_TIMEOUT", 10*time.Second),
 			Cooldown:       envDur("ALERT_COOLDOWN", 5*time.Minute),
 			HighLatencyMs:  int64(envInt("ALERT_HIGH_LATENCY_MS", 0)),
 			RetryAttempts:  envInt("ALERT_RETRY_ATTEMPTS", 2),
@@ -120,6 +129,7 @@ func Load() (*Config, error) {
 			APIKey:            envStr("API_KEY", ""),
 			RateLimitRPS:      envFloat("RATE_LIMIT_RPS", 20),
 			RateLimitBurst:    envInt("RATE_LIMIT_BURST", 40),
+			TrustProxyHeaders: envBool("TRUST_PROXY_HEADERS", false),
 			CORSAllowedOrigin: envStr("CORS_ALLOWED_ORIGIN", ""),
 			ShutdownTimeout:   envDur("API_SHUTDOWN_TIMEOUT", 15*time.Second),
 			SAASMode:          envBool("SAAS_MODE", false),
@@ -172,6 +182,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Alerts.HighLatencyMs < 0 {
 		errs = append(errs, errors.New("ALERT_HIGH_LATENCY_MS cannot be negative"))
+	}
+	if c.RetentionDays < 0 {
+		errs = append(errs, errors.New("RETENTION_DAYS cannot be negative"))
+	}
+	if c.RetentionInterval < 0 {
+		errs = append(errs, errors.New("RETENTION_INTERVAL cannot be negative"))
 	}
 	return errors.Join(errs...)
 }

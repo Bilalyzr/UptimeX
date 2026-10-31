@@ -15,7 +15,7 @@ import (
 // percentiles must come from a bounded, documented population).
 const (
 	MaxSamplesPerEndpoint = 20_000
-	MaxWindow             = 30 * 24 * time.Hour
+	MaxWindow             = 90 * 24 * time.Hour
 	DefaultWindow         = time.Hour
 	TrendPoints           = 48
 )

@@ -19,16 +19,20 @@ type MetricsHandler struct {
 	Logger      *slog.Logger
 }
 
-// Overview returns monitoring metrics (?window=1h|24h|7d), scoped to the
-// caller's organization in SaaS mode.
+// Overview returns monitoring metrics (?window=1h|24h|7d|30d|90d), scoped to
+// the caller's organization in SaaS mode.
 func (h *MetricsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	window, err := metrics.ParseWindow(r.URL.Query().Get("window"), metrics.DefaultWindow)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	id := middleware.IdentityFromContext(r.Context())
+	if !enforcePlanHistory(w, id, window) {
+		return
+	}
 	var ov *metrics.OverviewMetrics
-	if id := middleware.IdentityFromContext(r.Context()); id != nil && id.Session {
+	if id.IsTenant() {
 		ov, err = h.Metrics.OverviewInOrg(r.Context(), id.OrgID, window)
 	} else {
 		ov, err = h.Metrics.Overview(r.Context(), window)
@@ -45,7 +49,7 @@ func (h *MetricsHandler) Overview(w http.ResponseWriter, r *http.Request) {
 // worker utilization and queue depth (PRD §27). Engine stats span every
 // tenant, so they are operator-only.
 func (h *MetricsHandler) Stats(w http.ResponseWriter, r *http.Request) {
-	if id := middleware.IdentityFromContext(r.Context()); id != nil && id.Session {
+	if id := middleware.IdentityFromContext(r.Context()); id.IsTenant() {
 		writeError(w, http.StatusForbidden, "engine stats are available to operators only")
 		return
 	}
@@ -83,7 +87,7 @@ func (h *IncidentHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	var incidents []models.IncidentDetail
 	var err error
-	if id := middleware.IdentityFromContext(r.Context()); id != nil && id.Session {
+	if id := middleware.IdentityFromContext(r.Context()); id.IsTenant() {
 		incidents, err = h.Repo.ListIncidentsInOrg(r.Context(), id.OrgID, status, limit)
 	} else {
 		incidents, err = h.Repo.ListIncidents(r.Context(), status, limit)

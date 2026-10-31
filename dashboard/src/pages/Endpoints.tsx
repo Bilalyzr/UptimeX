@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError, buildQuery } from '../api/client';
+import { useAuth } from '../auth';
 import { usePolling } from '../hooks/usePolling';
 import type { CheckResult, EndpointSummary } from '../types';
 import { formatAge, formatMs, formatPct } from '../format';
@@ -10,6 +11,7 @@ import { EndpointForm } from '../components/EndpointForm';
 const REFRESH_MS = 10_000;
 
 export function Endpoints() {
+  const { refresh: refreshAuth } = useAuth();
   const [windowParam, setWindowParam] = useState('1h');
   const [editing, setEditing] = useState<EndpointSummary | null>(null);
   const [creating, setCreating] = useState(false);
@@ -63,6 +65,7 @@ export function Endpoints() {
     try {
       await api.del(`/api/v1/endpoints/${ep.id}`);
       await list.refresh();
+      void refreshAuth();
     } catch (err) {
       alert(`Delete failed: ${err instanceof ApiError ? err.message : err}`);
     } finally {
@@ -183,6 +186,7 @@ export function Endpoints() {
           onDone={() => {
             setCreating(false);
             void list.refresh();
+            void refreshAuth();
           }}
         />
       ) : null}

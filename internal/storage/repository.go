@@ -23,6 +23,10 @@ var ErrDuplicateOpenIncident = errors.New("open incident already exists for endp
 // email (unique index on users.email).
 var ErrDuplicateEmail = errors.New("email already registered")
 
+// ErrDuplicateSlug is returned when updating or creating an organization with
+// an already-taken status-page slug.
+var ErrDuplicateSlug = errors.New("organization slug already taken")
+
 // LatencySample is one raw observation used for metrics computation.
 type LatencySample struct {
 	EndpointID     int64
@@ -41,13 +45,16 @@ type Repository interface {
 	CreateEndpoint(ctx context.Context, e *models.Endpoint) error
 	GetEndpoint(ctx context.Context, id int64) (*models.Endpoint, error)
 	ListEndpoints(ctx context.Context, onlyEnabled bool) ([]models.Endpoint, error)
+	ListEndpointsInOrg(ctx context.Context, orgID int64) ([]models.Endpoint, error)
 	UpdateEndpoint(ctx context.Context, e *models.Endpoint) error
 	DeleteEndpoint(ctx context.Context, id int64) error
 	CountEndpoints(ctx context.Context) (int64, error)
 
-	// Checks
+	// Checks & retention (PRD FR-14)
 	InsertCheck(ctx context.Context, r models.CheckResult) (int64, error)
 	ListChecks(ctx context.Context, endpointID int64, since time.Time, limit int) ([]models.HealthCheck, error)
+	PruneChecksBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	PruneChecksByOrgPlan(ctx context.Context, cutoffsByPlan map[string]time.Time, defaultCutoff time.Time) (int64, error)
 
 	// Raw samples for metrics (most recent first, bounded per endpoint).
 	SelectEndpointSamples(ctx context.Context, endpointID int64, since time.Time, limit int) ([]LatencySample, error)
@@ -69,6 +76,7 @@ type Repository interface {
 
 	// SaaS tenancy: organizations, users, sessions.
 	CreateOrganization(ctx context.Context, o *models.Organization) error
+	CreateOrganizationWithOwner(ctx context.Context, o *models.Organization, u *models.User) error
 	GetOrganization(ctx context.Context, id int64) (*models.Organization, error)
 	GetOrganizationBySlug(ctx context.Context, slug string) (*models.Organization, error)
 	UpdateOrganization(ctx context.Context, o *models.Organization) error
@@ -76,6 +84,7 @@ type Repository interface {
 	CreateUser(ctx context.Context, u *models.User) error
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByID(ctx context.Context, id int64) (*models.User, error)
+	UpdateUserName(ctx context.Context, userID int64, name string) error
 	CreateSession(ctx context.Context, s *models.Session) error
 	GetSessionByTokenHash(ctx context.Context, tokenHash string) (*models.Session, error)
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error
@@ -83,6 +92,23 @@ type Repository interface {
 	UpdateUserPassword(ctx context.Context, userID int64, passwordHash string) error
 	ListSessionsForUser(ctx context.Context, userID int64) ([]models.Session, error)
 	DeleteSessionsForUserExcept(ctx context.Context, userID int64, keepTokenHash string) error
+
+	// SaaS alert channels, per-org API keys, and password reset tokens.
+	CreateAlertChannel(ctx context.Context, ch *models.AlertChannel) error
+	GetAlertChannel(ctx context.Context, id int64) (*models.AlertChannel, error)
+	ListAlertChannelsByOrg(ctx context.Context, orgID int64, onlyEnabled bool) ([]models.AlertChannel, error)
+	UpdateAlertChannel(ctx context.Context, ch *models.AlertChannel) error
+	DeleteAlertChannel(ctx context.Context, orgID, id int64) error
+
+	CreateAPIKey(ctx context.Context, k *models.APIKey) error
+	ListAPIKeysByOrg(ctx context.Context, orgID int64) ([]models.APIKey, error)
+	GetAPIKeyByHash(ctx context.Context, tokenHash string) (*models.APIKey, error)
+	TouchAPIKeyLastUsed(ctx context.Context, id int64, at time.Time) error
+	DeleteAPIKey(ctx context.Context, orgID, id int64) error
+
+	CreatePasswordResetToken(ctx context.Context, t *models.PasswordResetToken) error
+	ConsumePasswordResetToken(ctx context.Context, tokenHash, newPasswordHash string) (int64, error)
+	DeleteExpiredPasswordResetTokens(ctx context.Context) error
 
 	// Org-scoped analytics (org_id 0 never matches; legacy rows have NULL).
 	CountEndpointsInOrg(ctx context.Context, orgID int64) (int64, error)

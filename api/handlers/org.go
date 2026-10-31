@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"uptimex/api/middleware"
 	"uptimex/internal/plans"
@@ -23,6 +24,7 @@ type OrgHandler struct {
 
 type orgPatchPayload struct {
 	Name              *string `json:"name"`
+	Slug              *string `json:"slug"`
 	StatusPageEnabled *bool   `json:"status_page_enabled"`
 }
 
@@ -87,20 +89,49 @@ func (h *OrgHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p.Name != nil {
-		if len(*p.Name) < 2 || len(*p.Name) > 100 {
+		trimmed := strings.TrimSpace(*p.Name)
+		if len(trimmed) < 2 || len(trimmed) > 100 {
 			writeError(w, http.StatusBadRequest, "organization name must be between 2 and 100 characters")
 			return
 		}
-		org.Name = *p.Name
+		org.Name = trimmed
+	}
+	if p.Slug != nil {
+		slug := strings.ToLower(strings.TrimSpace(*p.Slug))
+		if !validOrgSlug(slug) {
+			writeError(w, http.StatusBadRequest, "slug must be 2-60 lowercase letters, digits, or single hyphens")
+			return
+		}
+		org.Slug = slug
 	}
 	if p.StatusPageEnabled != nil {
 		org.StatusPageEnabled = *p.StatusPageEnabled
 	}
 	if err := h.Repo.UpdateOrganization(r.Context(), org); err != nil {
+		if errors.Is(err, storage.ErrDuplicateSlug) {
+			writeError(w, http.StatusConflict, "status page slug is already taken")
+			return
+		}
 		logInternalError(w, h.Logger, "org update", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, org)
+}
+
+func validOrgSlug(s string) bool {
+	if len(s) < 2 || len(s) > 60 {
+		return false
+	}
+	if s[0] == '-' || s[len(s)-1] == '-' || strings.Contains(s, "--") {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // ChangePlan switches the organization's plan. Demo billing: the switch is
@@ -120,12 +151,22 @@ func (h *OrgHandler) ChangePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown plan; available: free, pro, business")
 		return
 	}
-	// Downgrades must fit inside the target plan's quotas.
+	// Downgrades must fit inside the target plan's quotas (max endpoints AND min interval).
 	if used, err := h.Repo.CountEndpointsInOrg(r.Context(), id.OrgID); err == nil && used > int64(plan.MaxEndpoints) {
 		writeError(w, http.StatusConflict, "cannot downgrade: delete endpoints first (current "+
 			strconv.FormatInt(used, 10)+" exceeds "+plan.Name+" limit of "+
 			strconv.Itoa(plan.MaxEndpoints)+")")
 		return
+	}
+	if eps, err := h.Repo.ListEndpointsInOrg(r.Context(), id.OrgID); err == nil {
+		for _, ep := range eps {
+			if ep.IntervalSeconds < plan.MinIntervalSeconds {
+				writeError(w, http.StatusConflict, "cannot downgrade: endpoint "+strconv.Quote(ep.Name)+
+					" uses a "+strconv.Itoa(ep.IntervalSeconds)+"s check interval, below "+plan.Name+
+					" minimum of "+strconv.Itoa(plan.MinIntervalSeconds)+"s")
+				return
+			}
+		}
 	}
 	if err := h.Repo.UpdateOrganizationPlan(r.Context(), id.OrgID, plan.ID); err != nil {
 		logInternalError(w, h.Logger, "plan change", err)

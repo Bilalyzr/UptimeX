@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // ErrBlocked reports a target rejected by the SSRF guard.
@@ -121,4 +123,22 @@ func HostnameLooksPrivate(host string) bool {
 	h := strings.ToLower(strings.TrimSuffix(host, "."))
 	return h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0" ||
 		h == "metadata.google.internal" || h == "instance-data"
+}
+
+// SafeTransport returns an http.Transport enforcing Guard.Control at dial time.
+// Used by both HTTPChecker and tenant-configured outbound webhooks.
+func (g *Guard) SafeTransport() *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   g.Control,
+	}
+	return &http.Transport{
+		DialContext:         dialer.DialContext,
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 16,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	}
 }

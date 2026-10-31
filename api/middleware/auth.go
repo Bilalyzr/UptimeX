@@ -1,7 +1,8 @@
 // Request identity resolution for the SaaS layer: session cookies (tenant
-// users) and the legacy global API key (operator). The middleware only
-// resolves; enforcement (401 on anonymous traffic in SaaS mode) is a separate
-// wrapper so legacy deployments keep their exact previous behavior.
+// users), per-organization API keys (upx_...), and the legacy global API key
+// (operator). The middleware only resolves; enforcement (401 on anonymous
+// traffic in SaaS mode) is a separate wrapper so legacy deployments keep their
+// exact previous behavior.
 package middleware
 
 import (
@@ -11,6 +12,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"time"
 
 	"uptimex/internal/models"
 )
@@ -18,15 +20,21 @@ import (
 // SessionCookieName is the browser cookie carrying the raw session token.
 const SessionCookieName = "uptimex_session"
 
+// OrgAPIKeyPrefix distinguishes tenant-scoped API keys from operator keys.
+const OrgAPIKeyPrefix = "upx_"
+
 // Identity is the resolved caller of an API request.
 type Identity struct {
-	UserID int64
-	OrgID  int64 // tenant id; 0 = global (legacy) scope
-	Email  string
-	Plan   string
-	Role   string
-	// Session is true for a logged-in tenant user.
+	UserID   int64
+	OrgID    int64 // tenant id; 0 = global (legacy) scope
+	APIKeyID int64 // non-zero when authenticated via a tenant API key
+	Email    string
+	Plan     string
+	Role     string
+	// Session is true for a logged-in tenant user (browser cookie).
 	Session bool
+	// OrgKey is true for a valid per-organization programmatic API key.
+	OrgKey bool
 	// Legacy is true for the operator scope: valid global API key, or the
 	// open development mode (no key configured). Legacy identities see all
 	// endpoints, including NULL-org ones.
@@ -36,7 +44,15 @@ type Identity struct {
 }
 
 // Authenticated reports whether the caller presented valid credentials.
-func (i *Identity) Authenticated() bool { return i.Session || (i.Legacy && i.keyValid) }
+func (i *Identity) Authenticated() bool {
+	return i != nil && (i.Session || i.OrgKey || (i.Legacy && i.keyValid))
+}
+
+// IsTenant reports whether the caller is scoped to a specific SaaS organization
+// (either via a browser session or a per-org API key).
+func (i *Identity) IsTenant() bool {
+	return i != nil && (i.Session || i.OrgKey) && i.OrgID > 0
+}
 
 // ScopeOrgID returns the tenant scope, or nil for the global legacy scope.
 func (i *Identity) ScopeOrgID() *int64 {
@@ -67,6 +83,13 @@ type SessionRepo interface {
 	GetOrganization(ctx context.Context, id int64) (*models.Organization, error)
 }
 
+// orgAPIKeyRepo is an optional extension implemented by SQLStore to resolve
+// tenant-scoped upx_... API keys without forcing tiny test mocks to implement it.
+type orgAPIKeyRepo interface {
+	GetAPIKeyByHash(ctx context.Context, tokenHash string) (*models.APIKey, error)
+	TouchAPIKeyLastUsed(ctx context.Context, id int64, at time.Time) error
+}
+
 // ResolveIdentity resolves session/API-key identities and stores them in the
 // request context. It never rejects a request.
 type ResolveIdentity struct {
@@ -80,7 +103,7 @@ func (m *ResolveIdentity) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.Next.ServeHTTP(w, r.WithContext(WithIdentity(r.Context(), id)))
 }
 
-func (m *ResolveIdentity) resolve(w http.ResponseWriter, r *http.Request) *Identity {
+func (m *ResolveIdentity) resolve(_ http.ResponseWriter, r *http.Request) *Identity {
 	// 1) Session cookie → tenant identity.
 	if m.Repo != nil {
 		if c, err := r.Cookie(SessionCookieName); err == nil && strings.TrimSpace(c.Value) != "" {
@@ -101,16 +124,35 @@ func (m *ResolveIdentity) resolve(w http.ResponseWriter, r *http.Request) *Ident
 		}
 	}
 
-	// 2) Global API key → legacy operator identity.
-	provided := r.Header.Get("X-API-Key")
+	// 2) Header / Bearer credential → either global operator key or tenant upx_ key.
+	provided := strings.TrimSpace(r.Header.Get("X-API-Key"))
 	if provided == "" {
 		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-			provided = strings.TrimPrefix(auth, "Bearer ")
+			provided = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		}
 	}
 	if m.APIKey != "" && provided != "" &&
 		subtle.ConstantTimeCompare([]byte(provided), []byte(m.APIKey)) == 1 {
 		return &Identity{Legacy: true, keyValid: true}
+	}
+	if strings.HasPrefix(provided, OrgAPIKeyPrefix) && m.Repo != nil {
+		if kr, ok := m.Repo.(orgAPIKeyRepo); ok {
+			sum := sha256.Sum256([]byte(provided))
+			if key, err := kr.GetAPIKeyByHash(r.Context(), hex.EncodeToString(sum[:])); err == nil {
+				if org, err := m.Repo.GetOrganization(r.Context(), key.OrgID); err == nil {
+					_ = kr.TouchAPIKeyLastUsed(r.Context(), key.ID, time.Now().UTC())
+					return &Identity{
+						OrgID:    org.ID,
+						APIKeyID: key.ID,
+						Plan:     org.Plan,
+						Role:     models.RoleOwner,
+						OrgKey:   true,
+					}
+				}
+			}
+		}
+		// An invalid upx_ key must never fall through to anonymous dev access.
+		return nil
 	}
 
 	// 3) Anonymous. In open dev mode (no key configured) callers keep the
@@ -122,8 +164,8 @@ func (m *ResolveIdentity) resolve(w http.ResponseWriter, r *http.Request) *Ident
 }
 
 // Gate enforces authentication after ResolveIdentity has run. Accepted:
-// a tenant session, the operator API key, or — only outside SaaS mode — the
-// open development mode (no key configured).
+// a tenant session, a per-org API key, the operator API key, or — only outside
+// SaaS mode — the open development mode (no key configured).
 type Gate struct {
 	APIKey   string
 	SAASMode bool
@@ -132,7 +174,7 @@ type Gate struct {
 
 func (m *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := IdentityFromContext(r.Context())
-	if id != nil && id.Session {
+	if id != nil && (id.Session || id.OrgKey) {
 		m.Next.ServeHTTP(w, r)
 		return
 	}
@@ -144,13 +186,18 @@ func (m *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.Next.ServeHTTP(w, r)
 		return
 	}
+	msg := `{"error":"authentication required"}`
+	if !m.SAASMode && m.APIKey != "" {
+		msg = `{"error":"missing or invalid API key"}`
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"error":"authentication required"}`))
+	_, _ = w.Write([]byte(msg))
 }
 
 // RequireSession admits only logged-in tenant users (never the operator
-// key): used by /auth/me and /org* account routes.
+// key or an API key): used by /auth/me, password/session management, and
+// key/channel administration routes.
 type RequireSession struct {
 	Next http.Handler
 }

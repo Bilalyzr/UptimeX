@@ -189,6 +189,8 @@ docs/                   architecture, API, benchmarks, security
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — 50/100/500/1000 endpoint
   benchmark results and analysis
 - [docs/SECURITY.md](docs/SECURITY.md) — SSRF protection, secrets, auth
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — step-by-step free production
+  deployment (Supabase + Render + Cloudflare Pages)
 
 ## Operational narrative
 

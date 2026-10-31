@@ -49,7 +49,7 @@ jobs:
         run: go test ./... -count=1
 
       - name: Race detection
-        run: go test -race -count=1 ./internal/... ./tests/e2e/...
+        run: go test -race -count=1 ./internal/... ./api/... ./tests/e2e/...
 
       - name: Integration tests (PostgreSQL)
         run: go test -count=1 -v ./tests/integration/...
@@ -97,7 +97,7 @@ jobs:
       - name: Build dashboard image
         run: docker build -t uptimex-dashboard:ci ./dashboard
 
-      # Compose validation: the stack must come up healthy.
+      # Compose validation: the stack must come up healthy in both legacy and SaaS modes.
       - name: Compose smoke test
         run: |
           docker compose up -d --build
@@ -106,6 +106,14 @@ jobs:
             sleep 2
           done
           curl -sf http://localhost:8080/health
+          curl -sf http://localhost:8080/ready
           curl -sf http://localhost:8080/api/v1/metrics/overview
           curl -sf -o /dev/null http://localhost:8090/
+          docker compose down -v
+          SAAS_MODE=true docker compose up -d
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health > /dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://localhost:8080/api/v1/public/status/acme-corp
           docker compose down -v

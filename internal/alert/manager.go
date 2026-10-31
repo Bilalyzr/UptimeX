@@ -46,10 +46,17 @@ func key(a models.Alert) string {
 }
 
 // Dispatch delivers an alert unless an identical alert fired within the
-// cooldown window. RECOVERED alerts bypass cooldown after a matching DOWN
-// was delivered (they resolve the story), but still dedup among themselves.
+// cooldown window. RECOVERED alerts also reset the matching DOWN cooldown key
+// so a fresh outage right after recovery is never suppressed.
 func (m *Manager) Dispatch(ctx context.Context, alert models.Alert) {
-	if len(m.channels) == 0 {
+	m.DispatchWithExtra(ctx, alert, nil)
+}
+
+// DispatchWithExtra fans an alert out to the manager's global channels plus
+// any tenant-specific channels, applying unified per-(endpoint, type) cooldown.
+func (m *Manager) DispatchWithExtra(ctx context.Context, alert models.Alert, extra []Channel) {
+	total := len(m.channels) + len(extra)
+	if total == 0 {
 		return
 	}
 	k := key(alert)
@@ -64,10 +71,17 @@ func (m *Manager) Dispatch(ctx context.Context, alert models.Alert) {
 		}
 	}
 	m.lastSent[k] = time.Now()
+	if alert.Type == models.AlertRecovered && alert.EndpointID != 0 {
+		delete(m.lastSent, fmt.Sprintf("%s:%d", models.AlertDown, alert.EndpointID))
+	}
 	m.mu.Unlock()
 
 	alert.DetectedAt = time.Now().UTC()
-	for _, ch := range m.channels {
+	all := make([]Channel, 0, total)
+	all = append(all, m.channels...)
+	all = append(all, extra...)
+
+	for _, ch := range all {
 		if err := ch.Send(ctx, alert); err != nil {
 			m.mu.Lock()
 			m.failCount[ch.Name()]++

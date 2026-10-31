@@ -10,6 +10,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: process.env.VITE_MONITOR_URL || 'http://localhost:8080', changeOrigin: true },
       '/health': { target: process.env.VITE_MONITOR_URL || 'http://localhost:8080', changeOrigin: true },
+      '/ready': { target: process.env.VITE_MONITOR_URL || 'http://localhost:8080', changeOrigin: true },
     },
   },
   test: {

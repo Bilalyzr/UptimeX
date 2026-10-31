@@ -4,10 +4,14 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,8 +37,12 @@ func newProbeTarget(t *testing.T) *httptest.Server {
 }
 
 // newSaaSServer builds the full route tree in SaaS mode (identity required
-// on data routes, auth/org/public handlers registered).
+// on data routes, auth/org/public/alert-channels/api-keys handlers registered).
 func newSaaSServer(t *testing.T) *apiServer {
+	return newSaaSServerWithAuthHook(t, nil)
+}
+
+func newSaaSServerWithAuthHook(t *testing.T, onReset func(email, token string)) *apiServer {
 	t.Helper()
 	store, err := storage.Open(context.Background(), storage.Options{Driver: "sqlite", SQLitePath: ":memory:"})
 	if err != nil {
@@ -43,9 +51,17 @@ func newSaaSServer(t *testing.T) *apiServer {
 	t.Cleanup(func() { _ = store.Close() })
 
 	target := newProbeTarget(t)
-	engine := monitor.New(store, checker.NewHTTPChecker(checker.NewGuard(true)),
+	guard := checker.NewGuard(true)
+	engine := monitor.New(store, checker.NewHTTPChecker(guard),
 		alert.NewManager(nil, 0, logging.NewForTest()),
-		monitor.Config{WorkerCount: 4, JobQueueSize: 64, SchedulerTick: 40 * time.Millisecond},
+		monitor.Config{
+			WorkerCount:   4,
+			JobQueueSize:  64,
+			SchedulerTick: 40 * time.Millisecond,
+			SAASMode:      true,
+			PublicURL:     "https://status.uptimex.test",
+			Guard:         guard,
+		},
 		logging.NewForTest())
 	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -59,12 +75,26 @@ func newSaaSServer(t *testing.T) *apiServer {
 		APIConfig: cfg,
 		Repo:      store,
 		Health:    handlers.NewHealthHandler(time.Now().UTC(), "test", func() error { return nil }),
-		Endpoints: &handlers.EndpointHandler{Repo: store, Engine: engine, Guard: checker.NewGuard(true), Metrics: metricsSvc, Logger: logging.NewForTest()},
+		Endpoints: &handlers.EndpointHandler{Repo: store, Engine: engine, Guard: guard, Metrics: metricsSvc, Logger: logging.NewForTest()},
 		Metrics:   &handlers.MetricsHandler{Metrics: metricsSvc, Repo: store, EngineStats: func() any { return engine.Stats() }, Logger: logging.NewForTest()},
 		Incidents: &handlers.IncidentHandler{Repo: store, Logger: logging.NewForTest()},
-		Auth:      &handlers.AuthHandler{Repo: store, Logger: logging.NewForTest(), SessionTTL: time.Hour},
-		Org:       &handlers.OrgHandler{Repo: store, Logger: logging.NewForTest()},
-		Public:    &handlers.PublicHandler{Repo: store, Logger: logging.NewForTest()},
+		Auth: &handlers.AuthHandler{
+			Repo:         store,
+			Logger:       logging.NewForTest(),
+			SessionTTL:   time.Hour,
+			PublicURL:    "https://status.uptimex.test",
+			OnResetToken: onReset,
+		},
+		Org:    &handlers.OrgHandler{Repo: store, Logger: logging.NewForTest()},
+		Public: &handlers.PublicHandler{Repo: store, Logger: logging.NewForTest()},
+		AlertChannels: &handlers.AlertChannelHandler{
+			Repo:      store,
+			Engine:    engine,
+			Guard:     guard,
+			Logger:    logging.NewForTest(),
+			PublicURL: "https://status.uptimex.test",
+		},
+		APIKeys: &handlers.APIKeyHandler{Repo: store, Logger: logging.NewForTest()},
 	})
 	return &apiServer{t: t, handler: handler, store: store, target: target}
 }
@@ -402,5 +432,227 @@ func TestSaaSAuthRateLimit(t *testing.T) {
 	}
 	if got429 == 0 {
 		t.Fatal("credential endpoints must enforce a strict per-IP budget")
+	}
+}
+
+func TestSaaSTransactionalSignupRollback(t *testing.T) {
+	s := newSaaSServer(t)
+	c := &saasClient{s: s}
+
+	if resp, body := c.do("POST", "/api/v1/auth/signup", signupBody("dup@acme.test", "hunter2hunter2", "First Org")); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first signup = %d: %v", resp.StatusCode, body)
+	}
+
+	// Second signup with duplicate email and brand-new org name must roll back
+	// the entire transaction so no orphaned organization row is persisted.
+	other := &saasClient{s: s}
+	resp, _ := other.do("POST", "/api/v1/auth/signup", signupBody("dup@acme.test", "hunter2hunter2", "Orphan Co"))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate signup = %d, want 409", resp.StatusCode)
+	}
+	if _, err := s.store.GetOrganizationBySlug(context.Background(), "orphan-co"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("expected orphan-co to roll back cleanly, got err=%v", err)
+	}
+}
+
+func TestSaaSPlanHistoryDaysAndDowngradeIntervalGuard(t *testing.T) {
+	s := newSaaSServer(t)
+	c := &saasClient{s: s}
+	if resp, body := c.do("POST", "/api/v1/auth/signup", signupBody("plan@acme.test", "hunter2hunter2", "Plan Co")); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup = %d: %v", resp.StatusCode, body)
+	}
+
+	// Free plan (7d history) rejects 30d window.
+	if resp, _ := c.do("GET", "/api/v1/metrics/overview?window=30d", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("free 30d overview = %d, want 403", resp.StatusCode)
+	}
+
+	// Upgrade to Pro (30d history, 30s min interval).
+	if resp, _ := c.do("POST", "/api/v1/org/plan", `{"plan_id":"pro"}`); resp.StatusCode != http.StatusOK {
+		t.Fatal("upgrade to pro failed")
+	}
+	if resp, _ := c.do("GET", "/api/v1/metrics/overview?window=30d", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("pro 30d overview = %d, want 200", resp.StatusCode)
+	}
+	if resp, _ := c.do("GET", "/api/v1/metrics/overview?window=90d", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pro 90d overview = %d, want 403", resp.StatusCode)
+	}
+
+	// Register a 30s endpoint on Pro; downgrading to Free (60s min) must 409 Conflict.
+	epBody := fmt.Sprintf(`{"name":"Fast Probe","url":%q,"interval_seconds":30}`, s.target.URL)
+	if resp, body := c.do("POST", "/api/v1/endpoints", epBody); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create 30s endpoint = %d: %v", resp.StatusCode, body)
+	}
+	if resp, body := c.do("POST", "/api/v1/org/plan", `{"plan_id":"free"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("downgrade with 30s endpoint = %d, want 409: %v", resp.StatusCode, body)
+	}
+
+	// Upgrade to Business unlocks 90d window.
+	if resp, _ := c.do("POST", "/api/v1/org/plan", `{"plan_id":"business"}`); resp.StatusCode != http.StatusOK {
+		t.Fatal("upgrade to business failed")
+	}
+	if resp, _ := c.do("GET", "/api/v1/metrics/overview?window=90d", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("business 90d overview = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestSaaSAlertChannelsAndTestPing(t *testing.T) {
+	s := newSaaSServer(t)
+	c := &saasClient{s: s}
+	if resp, body := c.do("POST", "/api/v1/auth/signup", signupBody("alerts@acme.test", "hunter2hunter2", "Alerts Co")); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup = %d: %v", resp.StatusCode, body)
+	}
+
+	var (
+		mu      sync.Mutex
+		gotSig  string
+		gotType string
+	)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		_ = json.Unmarshal(raw, &payload)
+		mu.Lock()
+		gotSig = r.Header.Get("X-UptimeX-Signature")
+		if v, ok := payload["type"].(string); ok {
+			gotType = v
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	// Free plan blocks HMAC-signed webhook secrets.
+	signedPayload := fmt.Sprintf(`{"name":"On-Call","type":"webhook","target":%q,"secret":"hmac-key"}`, hook.URL)
+	if resp, _ := c.do("POST", "/api/v1/alert-channels", signedPayload); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("free plan HMAC secret = %d, want 403", resp.StatusCode)
+	}
+
+	// Upgrade to Pro and create signed webhook channel.
+	_, _ = c.do("POST", "/api/v1/org/plan", `{"plan_id":"pro"}`)
+	resp, body := c.do("POST", "/api/v1/alert-channels", signedPayload)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("pro signed webhook create = %d: %v", resp.StatusCode, body)
+	}
+	if body["has_secret"] != true || body["secret"] != nil {
+		t.Fatalf("channel response leaked or missed secret flag: %v", body)
+	}
+	chID := int64(body["id"].(float64))
+
+	// Fire live test notification.
+	resp, body = c.do("POST", fmt.Sprintf("/api/v1/alert-channels/%d/test", chID), "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("test channel = %d: %v", resp.StatusCode, body)
+	}
+	mu.Lock()
+	sig, typ := gotSig, gotType
+	mu.Unlock()
+	if sig == "" || typ != "TEST" {
+		t.Fatalf("webhook received sig=%q type=%q, want signed TEST", sig, typ)
+	}
+
+	// Delete channel.
+	if resp, _ := c.do("DELETE", fmt.Sprintf("/api/v1/alert-channels/%d", chID), ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete channel = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestSaaSAPIKeysAndProfileOrgSlug(t *testing.T) {
+	s := newSaaSServer(t)
+	acme := &saasClient{s: s}
+	if resp, body := acme.do("POST", "/api/v1/auth/signup", signupBody("keys@acme.test", "hunter2hunter2", "Keys Co")); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup = %d: %v", resp.StatusCode, body)
+	}
+	other := &saasClient{s: s}
+	_, _ = other.do("POST", "/api/v1/auth/signup", signupBody("other@other.test", "hunter2hunter2", "Other Co"))
+
+	// Update display name and org slug.
+	if resp, body := acme.do("PATCH", "/api/v1/auth/me", `{"name":"Alice Keys"}`); resp.StatusCode != http.StatusOK || body["user"].(map[string]any)["name"] != "Alice Keys" {
+		t.Fatalf("patch profile = %d: %v", resp.StatusCode, body)
+	}
+	if resp, body := acme.do("PATCH", "/api/v1/org", `{"slug":"keys-status"}`); resp.StatusCode != http.StatusOK || body["slug"] != "keys-status" {
+		t.Fatalf("patch org slug = %d: %v", resp.StatusCode, body)
+	}
+	// Duplicate slug rejected with 409.
+	if resp, _ := acme.do("PATCH", "/api/v1/org", `{"slug":"other-co"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate slug = %d, want 409", resp.StatusCode)
+	}
+
+	// Mint programmatic API key.
+	resp, body := acme.do("POST", "/api/v1/api-keys", `{"name":"CI Pipeline"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create api key = %d: %v", resp.StatusCode, body)
+	}
+	rawToken, _ := body["token"].(string)
+	if !strings.HasPrefix(rawToken, "upx_") {
+		t.Fatalf("unexpected token format: %q", rawToken)
+	}
+	keyID := int64(body["api_key"].(map[string]any)["id"].(float64))
+
+	// Use Bearer upx_... without any session cookie to create and list endpoints.
+	authHdr := map[string]string{"Authorization": "Bearer " + rawToken}
+	epPayload := fmt.Sprintf(`{"name":"CI Endpoint","url":%q,"interval_seconds":60,"expected_body_contains":""}`, s.target.URL)
+	resp, body = s.do("POST", "/api/v1/endpoints", epPayload, authHdr)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("api key create endpoint = %d: %v", resp.StatusCode, body)
+	}
+	// Other org still sees 0 endpoints (strict tenant isolation on API keys).
+	if _, otherBody := other.do("GET", "/api/v1/endpoints", ""); len(otherBody["endpoints"].([]any)) != 0 {
+		t.Fatalf("other org saw api-key endpoint: %v", otherBody)
+	}
+
+	// Revoke key -> immediate 401.
+	if resp, _ := acme.do("DELETE", fmt.Sprintf("/api/v1/api-keys/%d", keyID), ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete api key = %d, want 204", resp.StatusCode)
+	}
+	if resp, _ := s.do("GET", "/api/v1/endpoints", "", authHdr); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked api key = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestSaaSForgotAndResetPasswordFlow(t *testing.T) {
+	var issuedToken string
+	s := newSaaSServerWithAuthHook(t, func(email, token string) {
+		issuedToken = token
+	})
+
+	c := &saasClient{s: s}
+	if resp, body := c.do("POST", "/api/v1/auth/signup", signupBody("reset@acme.test", "initial-pass-1", "Reset Co")); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup = %d: %v", resp.StatusCode, body)
+	}
+
+	// Unknown email still returns 200 without minting a token.
+	if resp, _ := s.do("POST", "/api/v1/auth/forgot-password", `{"email":"nobody@acme.test"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unknown forgot-password = %d, want 200", resp.StatusCode)
+	}
+	if issuedToken != "" {
+		t.Fatal("must not mint token for unknown email")
+	}
+
+	// Known email mints single-use token.
+	if resp, _ := s.do("POST", "/api/v1/auth/forgot-password", `{"email":"reset@acme.test"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("known forgot-password = %d, want 200", resp.StatusCode)
+	}
+	if issuedToken == "" {
+		t.Fatal("expected reset token to be minted")
+	}
+
+	// Reset password consumes token and revokes existing session `c`.
+	resetPayload := fmt.Sprintf(`{"token":%q,"new_password":"rotated-pass-2"}`, issuedToken)
+	if resp, body := s.do("POST", "/api/v1/auth/reset-password", resetPayload, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("reset-password = %d: %v", resp.StatusCode, body)
+	}
+	// Replay of single-use token must fail with 400.
+	if resp, _ := s.do("POST", "/api/v1/auth/reset-password", resetPayload, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("replayed reset token = %d, want 400", resp.StatusCode)
+	}
+	// Existing session cookie was revoked.
+	if resp, _ := c.do("GET", "/api/v1/auth/me", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("pre-reset session = %d, want 401", resp.StatusCode)
+	}
+	// New password logs in cleanly.
+	fresh := &saasClient{s: s}
+	if resp, _ := fresh.do("POST", "/api/v1/auth/login", `{"email":"reset@acme.test","password":"rotated-pass-2"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("login with rotated password = %d, want 200", resp.StatusCode)
 	}
 }

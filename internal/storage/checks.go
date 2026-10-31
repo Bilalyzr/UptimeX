@@ -206,4 +206,48 @@ func (s *SQLStore) StatusCounts(ctx context.Context, endpointID *int64, since ti
 	return out, rows.Err()
 }
 
+// PruneChecksBefore deletes raw health_checks older than cutoff (PRD FR-14).
+func (s *SQLStore) PruneChecksBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, s.q(`DELETE FROM health_checks WHERE checked_at < ?`), cutoff.UTC())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneChecksByOrgPlan enforces per-organization retention horizons based on
+// each tenant's subscribed plan, plus defaultCutoff for legacy NULL-org rows.
+func (s *SQLStore) PruneChecksByOrgPlan(ctx context.Context, cutoffsByPlan map[string]time.Time, defaultCutoff time.Time) (int64, error) {
+	var total int64
+	for planID, cutoff := range cutoffsByPlan {
+		if cutoff.IsZero() {
+			continue
+		}
+		res, err := s.db.ExecContext(ctx, s.q(`
+			DELETE FROM health_checks
+			WHERE endpoint_id IN (
+				SELECT e.id FROM endpoints e
+				JOIN organizations o ON o.id = e.org_id
+				WHERE o.plan = ?
+			) AND checked_at < ?`), planID, cutoff.UTC())
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	if !defaultCutoff.IsZero() {
+		res, err := s.db.ExecContext(ctx, s.q(`
+			DELETE FROM health_checks
+			WHERE endpoint_id IN (SELECT id FROM endpoints WHERE org_id IS NULL)
+			  AND checked_at < ?`), defaultCutoff.UTC())
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
+}
+
 var _ = errors.Is // keep errors import when interface evolves
