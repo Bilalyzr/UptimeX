@@ -419,17 +419,28 @@ func TestSaaSAccountSecurity(t *testing.T) {
 
 func TestSaaSAuthRateLimit(t *testing.T) {
 	s := newSaaSServer(t)
-	c := &saasClient{s: s}
 
-	// Hammer the credential endpoint well past the strict burst; the dummy
-	// PBKDF2 on unknown emails also equalizes timing per request.
-	got429 := 0
+	// Hammer the credential endpoint concurrently well past the strict burst
+	// (5). Concurrent dispatch ensures requests arrive within the same window
+	// even under -race where each 600k-iteration PBKDF2 call takes ~1s.
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		got429 int
+	)
 	for i := 0; i < 10; i++ {
-		resp, _ := c.do("POST", "/api/v1/auth/login", `{"email":"nobody@x.io","password":"whatever123"}`)
-		if resp.StatusCode == http.StatusTooManyRequests {
-			got429++
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, _ := s.do("POST", "/api/v1/auth/login", `{"email":"nobody@x.io","password":"whatever123"}`, nil)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				mu.Lock()
+				got429++
+				mu.Unlock()
+			}
+		}()
 	}
+	wg.Wait()
 	if got429 == 0 {
 		t.Fatal("credential endpoints must enforce a strict per-IP budget")
 	}

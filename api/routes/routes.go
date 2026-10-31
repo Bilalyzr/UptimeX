@@ -55,7 +55,7 @@ func New(d Deps) http.Handler {
 // small burst — generous for humans, hostile to online password guessing.
 const (
 	authRouteRPS   = 0.5
-	authRouteBurst = 7
+	authRouteBurst = 5
 )
 
 // buildMux registers all routes. Separated from New so tests can reuse it.
@@ -66,15 +66,19 @@ func buildMux(d Deps) *http.ServeMux {
 	mux.HandleFunc("GET /ready", d.Health.Readiness)
 
 	if d.Auth != nil {
-		// Credential endpoints carry a dedicated strict per-IP limiter on top
+		// Credential endpoints carry dedicated strict per-IP limiters on top
 		// of the global one: online password guessing and account-creation
 		// spam must not be bounded only by the (much higher) API budget.
+		// Password-recovery uses an independent bucket so a user who locked
+		// out login attempts can still reset their password.
 		authLimit := middleware.NewRateLimit(authRouteRPS, authRouteBurst, nil)
 		authLimit.TrustProxy = d.APIConfig.TrustProxyHeaders
+		resetLimit := middleware.NewRateLimit(authRouteRPS, authRouteBurst, nil)
+		resetLimit.TrustProxy = d.APIConfig.TrustProxyHeaders
 		mux.Handle("POST /api/v1/auth/signup", authLimit.Wrap(http.HandlerFunc(d.Auth.Signup)))
 		mux.Handle("POST /api/v1/auth/login", authLimit.Wrap(http.HandlerFunc(d.Auth.Login)))
-		mux.Handle("POST /api/v1/auth/forgot-password", authLimit.Wrap(http.HandlerFunc(d.Auth.ForgotPassword)))
-		mux.Handle("POST /api/v1/auth/reset-password", authLimit.Wrap(http.HandlerFunc(d.Auth.ResetPassword)))
+		mux.Handle("POST /api/v1/auth/forgot-password", resetLimit.Wrap(http.HandlerFunc(d.Auth.ForgotPassword)))
+		mux.Handle("POST /api/v1/auth/reset-password", resetLimit.Wrap(http.HandlerFunc(d.Auth.ResetPassword)))
 		mux.HandleFunc("POST /api/v1/auth/logout", d.Auth.Logout)
 		mux.Handle("GET /api/v1/auth/me", requireSession(d, d.Auth.Me))
 		mux.Handle("PATCH /api/v1/auth/me", requireSession(d, d.Auth.UpdateProfile))
